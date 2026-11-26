@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>수양관 사무 자동화</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sofia+Sans+Condensed:wght@700;800&family=Noto+Sans+KR:wght@400;500;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top noprint">
+  <div class="wrap bar">
+    <a class="brand" href="#home"><span class="mark">修</span><span><b id="orgName">덕정 수양관</b><small>사무 자동화</small></span></a>
+    <div class="who" id="who"></div>
+  </div>
+  <nav class="wrap" aria-label="메뉴">
+    <a href="#home" data-r="home">홈</a>
+    <a href="#logs" data-r="logs">작업 일지</a>
+    <a href="#album" data-r="album">사진첩</a>
+    <a href="#expenses" data-r="expenses">지출결의서</a>
+    <a href="#meals" data-r="meals">식수표</a>
+    <a href="#tasks" data-r="tasks">할 일</a>
+    <a href="#checks" data-r="checks">시설 점검</a>
+    <a href="#inventory" data-r="inventory">재고</a>
+    <a href="#contacts" data-r="contacts">연락처</a>
+    <a href="#settings" data-r="settings">설정</a>
+  </nav>
+</header>
+<main id="main" class="wrap"><p class="note">불러오는 중…</p></main>
+<datalist id="staffList"></datalist>
+<div class="toast" id="toast" hidden></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
