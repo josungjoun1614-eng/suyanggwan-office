@@ -41,9 +41,11 @@ new MutationObserver(() => { for (const c of document.querySelectorAll('.stack t
 
 /* ---------- 로그인 ---------- */
 const DOMAIN = 'suyanggwan.local';
-let ME = null;
+let ME = null, SITE = null, SITES = [];
 const myName = () => ME?.name || '';
 const isAdmin = () => ME?.role === '관리자';
+const isHQ = () => !!ME && ME.site_id === null;
+const siteName = id => (SITES.find(x => x.id === id) || {}).name || (id ? id : '본부');
 async function adminCall(body) {
   const { data, error } = await sb.functions.invoke('ow-admin', { body });
   if (error) { let msg = error.message; try { const j = await error.context.json(); if (j.error) msg = j.error; } catch {} toast(msg); throw new Error(msg); }
@@ -51,8 +53,8 @@ async function adminCall(body) {
 }
 function showLogin(msg = '') {
   ME = null; document.body.classList.add('out'); $('#who').innerHTML = '';
-  try { const o = localStorage.getItem('ow-org'); if (o) { S.org = { ...(S.org || {}), name: o }; $('#orgName').textContent = o; } } catch {}
-  M().innerHTML = `<div class="login"><h2>로그인</h2><p class="note">${esc(S.org?.name || '수양관')} 사무 자동화</p>
+  $('#orgName').textContent = '수양관 사무 자동화';
+  M().innerHTML = `<div class="login"><h2>로그인</h2><p class="note">삼봉리 · 안산 · 몽산포 · 덕정 · 충주 · 청풍</p>
     <form id="lf"><label class="f" for="lid">아이디<input id="lid" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
     <label class="f" for="lpw">비밀번호<input id="lpw" type="password" autocomplete="current-password" required></label>
     <p class="err" id="lerr">${esc(msg)}</p><button class="pri" type="submit">로그인</button></form>
@@ -74,7 +76,12 @@ async function loadMe() {
   return data && data.active ? data : null;
 }
 function drawWho() {
-  $('#who').innerHTML = `<span><b>${esc(ME.name)}</b> <span class="pill${isAdmin() ? ' acc' : ''}">${esc(ME.role)}</span></span><button class="ghost" id="pwBtn">비밀번호 변경</button><button id="outBtn">로그아웃</button>`;
+  const sitePart = isHQ()
+    ? `<select id="siteSel" aria-label="수양관 선택" style="width:auto;min-height:36px;padding:4px 8px">${SITES.map(x => `<option value="${esc(x.id)}"${x.id === SITE ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select>`
+    : `<span class="pill">${esc(siteName(SITE))}</span>`;
+  $('#who').innerHTML = `${sitePart}<span><b>${esc(ME.name)}</b> <span class="pill${isAdmin() ? ' acc' : ''}">${isHQ() ? '본부 ' : ''}${esc(ME.role)}</span></span><button class="ghost" id="pwBtn">비밀번호 변경</button><button id="outBtn">로그아웃</button>`;
+  const sel = $('#siteSel');
+  if (sel) sel.onchange = async () => { SITE = sel.value; try { localStorage.setItem('ow-site', SITE); } catch {} await loadSettings(); toast(siteName(SITE) + '(으)로 바꿨습니다.'); route(); };
   $('#outBtn').onclick = async () => { await sb.auth.signOut(); showLogin(); };
   $('#pwBtn').onclick = () => openModal('비밀번호 변경', `<div class="form"><label class="f" for="np1">새 비밀번호 (6자 이상)<input id="np1" type="password" autocomplete="new-password"></label><label class="f" for="np2">새 비밀번호 확인<input id="np2" type="password" autocomplete="new-password"></label></div>`,
     [{ label: '변경', cls: 'pri', onClick: async m => {
@@ -85,15 +92,16 @@ function drawWho() {
 }
 
 /* ---------- 설정 ---------- */
-let S = { org: { name: '덕정 수양관' }, roles: ['담당','팀장','총괄부장','사무처장'], approvers: {}, staff: [], meal: { people: [], price: 0, place: '' }, check_items: [] };
+const S_DEFAULT = { org: { name: '덕정 수양관' }, roles: ['담당','팀장','총괄부장','사무처장'], approvers: {}, staff: [], meal: { people: [], price: 0, place: '' }, check_items: [] };
+let S = { ...S_DEFAULT };
 async function loadSettings() {
-  const rows = await q(sb.from('ow_settings').select('key,value'));
+  const rows = await q(sb.from('ow_settings').select('key,value').eq('site_id', SITE));
+  S = { ...S_DEFAULT };
   for (const r of rows) S[r.key] = r.value;
   $('#orgName').textContent = S.org?.name || '수양관';
-  try { localStorage.setItem('ow-org', S.org?.name || ''); } catch {}
   $('#staffList').innerHTML = (S.staff || []).map(n => `<option value="${esc(n)}">`).join('');
 }
-async function saveSetting(k, v) { await q(sb.from('ow_settings').upsert({ key: k, value: v, updated_at: new Date().toISOString() })); S[k] = v; }
+async function saveSetting(k, v) { await q(sb.from('ow_settings').upsert({ site_id: SITE, key: k, value: v, updated_at: new Date().toISOString() }, { onConflict: 'site_id,key' })); S[k] = v; }
 
 /* ---------- 모달·폼 ---------- */
 function openModal(title, body, actions = []) {
@@ -198,17 +206,17 @@ addEventListener('hashchange', route);
 routes.home = async () => {
   const [a, b] = mRange(MONTH);
   const [logs, exps, meals, tasks, inv] = await Promise.all([
-    q(sb.from('ow_logs').select('id,date,tasks,approvals,place').gte('date', a).lt('date', b).order('date', { ascending: false })),
-    q(sb.from('ow_expenses').select('id,date,title,total,approvals').gte('date', a).lt('date', b).order('date', { ascending: false })),
-    q(sb.from('ow_meals').select('count').gte('date', a).lt('date', b)),
-    q(sb.from('ow_tasks').select('*').neq('status', '완료').order('due', { ascending: true, nullsFirst: false }).limit(50)),
-    q(sb.from('ow_inventory').select('id,name,qty,min_qty,unit'))
+    q(sb.from('ow_logs').select('id,date,tasks,approvals,place').eq('site_id', SITE).gte('date', a).lt('date', b).order('date', { ascending: false })),
+    q(sb.from('ow_expenses').select('id,date,title,total,approvals').eq('site_id', SITE).gte('date', a).lt('date', b).order('date', { ascending: false })),
+    q(sb.from('ow_meals').select('count').eq('site_id', SITE).gte('date', a).lt('date', b)),
+    q(sb.from('ow_tasks').select('*').eq('site_id', SITE).neq('status', '완료').order('due', { ascending: true, nullsFirst: false }).limit(50)),
+    q(sb.from('ow_inventory').select('id,name,qty,min_qty,unit').eq('site_id', SITE))
   ]);
   const low = inv.filter(i => Number(i.qty) <= Number(i.min_qty) && Number(i.min_qty) > 0);
   const mealN = meals.reduce((s, m) => s + m.count, 0);
   const t0 = today(), over = tasks.filter(t => t.due && t.due < t0);
   M().innerHTML = `
-  <div class="head"><h2>${esc(mLabel(MONTH))} 한눈에 보기</h2><div class="ctrls">${monthPick()}</div></div>
+  <div class="head"><h2>${esc(siteName(SITE))} · ${esc(mLabel(MONTH))}</h2><div class="ctrls">${monthPick()}</div></div>
   <div class="kpis">
     <a href="#logs" class="hot"><b class="num">${logs.length}</b><span>작업 일지</span></a>
     <a href="#logs"><b class="num">${pending(logs) + pending(exps)}</b><span>결재 대기 (일지·지출)</span></a>
@@ -234,7 +242,7 @@ const logCost = l => (l.mats || []).reduce((a, m) => a + (Number(m.qty) || 0) * 
 
 routes.logs = async () => {
   const [a, b] = mRange(MONTH);
-  const rows = await q(sb.from('ow_logs').select('*').gte('date', a).lt('date', b).order('date', { ascending: false }));
+  const rows = await q(sb.from('ow_logs').select('*').eq('site_id', SITE).gte('date', a).lt('date', b).order('date', { ascending: false }));
   M().innerHTML = `
   <div class="head"><h2>작업 일지</h2><div class="ctrls">${monthPick()}<a class="btn" href="#album">사진첩</a><a class="btn pri" href="#log-edit/new">+ 새 일지</a></div></div>
   <div class="kpis"><div class="hot"><b class="num">${rows.length}</b><span>일지</span></div><div><b class="num">${rows.reduce((s, l) => s + logHours(l), 0).toFixed(1).replace(/\.0$/, '')}</b><span>총 작업시간(h)</span></div><div><b class="num">${won(rows.reduce((s, l) => s + logCost(l), 0))}</b><span>자재비(원)</span></div><div><b class="num">${pending(rows)}</b><span>결재 대기</span></div></div>
@@ -331,7 +339,7 @@ routes['log-edit'] = async id => {
     const body = { date: d.date, weather: d.weather, author: d.author, place: d.place, cat: d.cat,
       tasks: d.tasks.filter(t => t.text || t.worker), crew: d.crew.filter(c => c.name), mats: d.mats.filter(m => m.name).map(m => ({ ...m, qty: Number(m.qty) || 0, price: Number(m.price) || 0 })),
       safety: d.safety, notes: d.notes, plan: d.plan, photos: d.photos, updated_at: new Date().toISOString() };
-    const res = l ? await q(sb.from('ow_logs').update(body).eq('id', l.id).select('id').single()) : await q(sb.from('ow_logs').insert(body).select('id').single());
+    const res = l ? await q(sb.from('ow_logs').update(body).eq('id', l.id).select('id').single()) : await q(sb.from('ow_logs').insert({ ...body, site_id: SITE }).select('id').single());
     toast('저장했습니다.'); location.hash = '#log/' + res.id;
   };
   $('#save').onclick = save; $('#save2').onclick = save;
@@ -340,7 +348,7 @@ routes['log-edit'] = async id => {
 /* 사진첩 */
 routes.album = async () => {
   const [a, b] = mRange(MONTH);
-  const rows = (await q(sb.from('ow_logs').select('id,date,place,tasks,photos').gte('date', a).lt('date', b).order('date', { ascending: false }))).filter(l => (l.photos || []).length);
+  const rows = (await q(sb.from('ow_logs').select('id,date,place,tasks,photos').eq('site_id', SITE).gte('date', a).lt('date', b).order('date', { ascending: false }))).filter(l => (l.photos || []).length);
   const list = []; const total = rows.reduce((s, l) => s + l.photos.length, 0);
   M().innerHTML = `<div class="head"><h2>작업 사진첩</h2><div class="ctrls">${monthPick()}<a class="btn" href="#logs">일지 목록</a></div></div>
   ${rows.length ? `<p class="note">${mLabel(MONTH)} 사진 ${total}장 · 일지 ${rows.length}건. 사진을 누르면 크게 볼 수 있습니다.</p>` : `<div class="empty">${mLabel(MONTH)}에 올린 사진이 없습니다. 일지 작성 화면의 <b>7. 작업 사진</b>에서 올리면 여기에 모입니다.</div>`}
@@ -367,7 +375,7 @@ const PAY = ['법인카드','개인카드(정산)','현금','계좌이체'];
 const expTotal = items => (items || []).reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.price) || 0), 0);
 routes.expenses = async () => {
   const [a, b] = mRange(MONTH);
-  const rows = await q(sb.from('ow_expenses').select('*').gte('date', a).lt('date', b).order('date', { ascending: false }));
+  const rows = await q(sb.from('ow_expenses').select('*').eq('site_id', SITE).gte('date', a).lt('date', b).order('date', { ascending: false }));
   M().innerHTML = `<div class="head"><h2>지출결의서</h2><div class="ctrls">${monthPick()}<a class="btn" href="#meals">식대 결의서 만들기</a><a class="btn pri" href="#exp-edit/new">+ 새 결의서</a></div></div>
   <div class="kpis"><div class="hot"><b class="num">${won(rows.reduce((s, e) => s + Number(e.total), 0))}</b><span>${mLabel(MONTH)} 지출 합계(원)</span></div><div><b class="num">${rows.length}</b><span>결의서</span></div><div><b class="num">${pending(rows)}</b><span>결재 대기</span></div></div>
   ${rows.length ? `<div class="scroll"><table class="stack"><thead><tr><th>지출일</th><th>제목</th><th>거래처</th><th>결제</th><th class="r">금액(원)</th><th>결재</th></tr></thead><tbody>${rows.map(e => `<tr><td>${esc(e.date)}</td><td><a href="#exp/${e.id}"><b>${esc(e.title)}</b></a></td><td>${esc(e.vendor)}</td><td>${esc(e.pay_method)}</td><td class="r num">${won(e.total)}</td><td>${stampsHTML(e.approvals)}</td></tr>`).join('')}</tbody></table></div>` : `<div class="empty">${mLabel(MONTH)} 지출결의서가 없습니다.</div>`}`;
@@ -420,7 +428,7 @@ routes['exp-edit'] = async id => {
   $('#fromMeal').onclick = async () => {
     const m = $('#mm').value; if (!m) return toast('불러올 달을 고르세요.');
     const [a, b] = mRange(m);
-    const rows = await q(sb.from('ow_meals').select('person,count').gte('date', a).lt('date', b));
+    const rows = await q(sb.from('ow_meals').select('person,count').eq('site_id', SITE).gte('date', a).lt('date', b));
     const cnt = {}; rows.forEach(r => cnt[r.person] = (cnt[r.person] || 0) + r.count);
     const people = [...new Set([...(S.meal?.people || []), ...Object.keys(cnt)])].filter(p => cnt[p]);
     if (!people.length) return toast(mLabel(m) + ' 식수표에 입력된 식수가 없습니다.');
@@ -452,7 +460,7 @@ routes['exp-edit'] = async id => {
           before: { items: e.items || [], total: Number(e.total) || 0, note: e.note || '' }, after: { items, total: body.total, note: body.note } }];
       }
     }
-    const res = e ? await q(sb.from('ow_expenses').update(body).eq('id', e.id).select('id').single()) : await q(sb.from('ow_expenses').insert(body).select('id').single());
+    const res = e ? await q(sb.from('ow_expenses').update(body).eq('id', e.id).select('id').single()) : await q(sb.from('ow_expenses').insert({ ...body, site_id: SITE }).select('id').single());
     toast('저장했습니다.'); location.hash = '#exp/' + res.id;
   };
 };
@@ -460,7 +468,7 @@ routes['exp-edit'] = async id => {
 /* ================= 식수표 ================= */
 routes.meals = async () => {
   const [a, b] = mRange(MONTH); const people = S.meal?.people || []; const price = Number(S.meal?.price) || 0;
-  const rows = await q(sb.from('ow_meals').select('*').gte('date', a).lt('date', b));
+  const rows = await q(sb.from('ow_meals').select('*').eq('site_id', SITE).gte('date', a).lt('date', b));
   const map = {}; rows.forEach(r => map[r.date + '|' + r.person] = r.count);
   const days = []; for (let d = new Date(a + 'T00:00'); ymd(d) < b; d.setDate(d.getDate() + 1)) days.push(ymd(d));
   const sum = p => days.reduce((s, d) => s + (map[d + '|' + p] || 0), 0);
@@ -476,19 +484,19 @@ routes.meals = async () => {
     bindMonth();
     M().querySelectorAll('[data-d]').forEach(btn => btn.onclick = async () => {
       const k = btn.dataset.d + '|' + btn.dataset.p, n = ((map[k] || 0) + 1) % 3;
-      if (n === 0) await q(sb.from('ow_meals').delete().eq('date', btn.dataset.d).eq('person', btn.dataset.p));
-      else await q(sb.from('ow_meals').upsert({ date: btn.dataset.d, person: btn.dataset.p, count: n }, { onConflict: 'date,person' }));
+      if (n === 0) await q(sb.from('ow_meals').delete().eq('site_id', SITE).eq('date', btn.dataset.d).eq('person', btn.dataset.p));
+      else await q(sb.from('ow_meals').upsert({ site_id: SITE, date: btn.dataset.d, person: btn.dataset.p, count: n }, { onConflict: 'site_id,date,person' }));
       map[k] = n; draw();
     });
     $('#fill') && ($('#fill').onclick = () => confirmBox(`${mLabel(MONTH)} 평일(월~금)에 모든 인원 1식씩 채웁니다. 이미 입력한 칸은 그대로 둡니다.`, '채우기', async () => {
-      const ins = []; days.forEach(d => { const w = new Date(d + 'T00:00').getDay(); if (w > 0 && w < 6) people.forEach(p => { if (!map[d + '|' + p]) ins.push({ date: d, person: p, count: 1 }); }); });
-      if (ins.length) await q(sb.from('ow_meals').upsert(ins, { onConflict: 'date,person', ignoreDuplicates: true }));
+      const ins = []; days.forEach(d => { const w = new Date(d + 'T00:00').getDay(); if (w > 0 && w < 6) people.forEach(p => { if (!map[d + '|' + p]) ins.push({ site_id: SITE, date: d, person: p, count: 1 }); }); });
+      if (ins.length) await q(sb.from('ow_meals').upsert(ins, { onConflict: 'site_id,date,person', ignoreDuplicates: true }));
       ins.forEach(r => map[r.date + '|' + r.person] = 1); draw(); toast(ins.length + '칸을 채웠습니다. 휴일·결근은 칸을 눌러 지우세요.');
     }));
     $('#mkexp') && ($('#mkexp').onclick = () => { const total = people.reduce((s, p) => s + sum(p), 0); if (!total) return toast('식수가 없습니다.');
       confirmBox(`${mLabel(MONTH)} 식대 ${won(total * price)}원으로 지출결의서를 만듭니다.`, '만들기', async () => {
         const items = [{ desc: `${mLabel(MONTH)} 직원 식대`, qty: total, price, note: `식수표 합산 (${people.filter(p => sum(p)).map(p => `${p} ${sum(p)}식`).join(', ')})` }];
-        const res = await q(sb.from('ow_expenses').insert({ date: today(), title: `${mLabel(MONTH)} 직원 식대`, dept: S.org?.name || '', author: myName(), vendor: S.meal?.place || '', pay_method: PAY[0], items, total: expTotal(items), note: `식수표 기준 (${mLabel(MONTH)}, 1식 ${won(price)}원)` }).select('id').single());
+        const res = await q(sb.from('ow_expenses').insert({ site_id: SITE, date: today(), title: `${mLabel(MONTH)} 직원 식대`, dept: S.org?.name || '', author: myName(), vendor: S.meal?.place || '', pay_method: PAY[0], items, total: expTotal(items), note: `식수표 기준 (${mLabel(MONTH)}, 1식 ${won(price)}원)` }).select('id').single());
         toast('지출결의서를 만들었습니다.'); location.hash = '#exp/' + res.id;
       }); });
   };
@@ -499,7 +507,7 @@ routes.meals = async () => {
 const TSTAT = ['할 일','진행중','완료'], PRI = ['높음','보통','낮음'];
 let TFILTER = '남은 일';
 routes.tasks = async () => {
-  const rows = await q(sb.from('ow_tasks').select('*').order('due', { ascending: true, nullsFirst: false }).order('created_at'));
+  const rows = await q(sb.from('ow_tasks').select('*').eq('site_id', SITE).order('due', { ascending: true, nullsFirst: false }).order('created_at'));
   const t0 = today();
   const F = [{ k: 'title', label: '할 일', req: 1, wide: 1 }, { k: 'due', label: '마감일', type: 'date' }, { k: 'assignee', label: '담당자', list: 'staffList' }, { k: 'priority', label: '중요도', type: 'select', options: PRI, def: '보통' }, { k: 'status', label: '상태', type: 'select', options: TSTAT, def: '할 일' }, { k: 'note', label: '메모', type: 'textarea', wide: 1 }];
   const shown = rows.filter(t => TFILTER === '전체' ? true : TFILTER === '남은 일' ? t.status !== '완료' : t.status === TFILTER);
@@ -509,7 +517,7 @@ routes.tasks = async () => {
     <div><button class="tt" data-ed="${t.id}">${t.priority === '높음' ? '<span class="pill bad">중요</span> ' : ''}${esc(t.title)}</button><div class="meta">${t.assignee ? `<span>${esc(t.assignee)}</span>` : ''}${t.note ? `<span>${esc(t.note.slice(0, 40))}</span>` : ''}</div></div>
     <span class="due ${t.due && t.due < t0 && t.status !== '완료' ? 'over' : ''}">${t.due ? esc(md(t.due)) + ' (' + dow(t.due) + ')' : ''}</span></div>`).join('') || '<div class="empty">할 일이 없습니다.</div>'}`;
   $('#tf').onchange = () => { TFILTER = $('#tf').value; route(); };
-  $('#add').onclick = () => formModal('할 일 추가', F, {}, async v => { await q(sb.from('ow_tasks').insert(v)); route(); });
+  $('#add').onclick = () => formModal('할 일 추가', F, {}, async v => { await q(sb.from('ow_tasks').insert({ ...v, site_id: SITE })); route(); });
   M().querySelectorAll('[data-st]').forEach(b => b.onclick = async () => { const t = rows.find(x => x.id === b.dataset.st); const n = TSTAT[(TSTAT.indexOf(t.status) + 1) % 3]; await q(sb.from('ow_tasks').update({ status: n, updated_at: new Date().toISOString() }).eq('id', t.id)); route(); });
   M().querySelectorAll('[data-ed]').forEach(b => b.onclick = () => { const t = rows.find(x => x.id === b.dataset.ed);
     formModal('할 일 수정', F, t, async v => { await q(sb.from('ow_tasks').update({ ...v, updated_at: new Date().toISOString() }).eq('id', t.id)); route(); },
@@ -520,7 +528,7 @@ routes.tasks = async () => {
 const CRES = ['양호','불량','조치완료'];
 routes.checks = async () => {
   const [a, b] = mRange(MONTH);
-  const rows = await q(sb.from('ow_checks').select('*').gte('date', a).lt('date', b).order('date', { ascending: false }));
+  const rows = await q(sb.from('ow_checks').select('*').eq('site_id', SITE).gte('date', a).lt('date', b).order('date', { ascending: false }));
   const bad = r => Object.values(r.results || {}).filter(x => x.r === '불량').length;
   M().innerHTML = `<div class="head"><h2>시설 점검</h2><div class="ctrls">${monthPick()}<a class="btn pri" href="#check-edit/new">+ 점검 기록</a></div></div>
   <div class="kpis"><div class="hot"><b class="num">${rows.length}</b><span>점검 횟수</span></div><div class="${rows.some(bad) ? 'bad' : ''}"><b class="num">${rows.reduce((s, r) => s + bad(r), 0)}</b><span>불량 항목</span></div></div>
@@ -554,14 +562,14 @@ routes['check-edit'] = async id => {
     if (!date || !inspector) return toast('점검일과 점검자를 입력하세요.');
     const results = {}; list.forEach((x, i) => { results[ckey(x, i)] = { area: x.area, item: x.item, r: M().querySelector(`[name="c${i}"]:checked`)?.value || '양호', note: M().querySelector(`[data-n="${i}"]`).value }; });
     const body = { date, inspector, results, note: $('#note').value };
-    const res = r ? await q(sb.from('ow_checks').update(body).eq('id', r.id).select('id').single()) : await q(sb.from('ow_checks').insert(body).select('id').single());
+    const res = r ? await q(sb.from('ow_checks').update(body).eq('id', r.id).select('id').single()) : await q(sb.from('ow_checks').insert({ ...body, site_id: SITE }).select('id').single());
     toast('저장했습니다.'); location.hash = '#check/' + res.id;
   };
 };
 
 /* ================= 재고 ================= */
 routes.inventory = async () => {
-  const rows = await q(sb.from('ow_inventory').select('*').order('name'));
+  const rows = await q(sb.from('ow_inventory').select('*').eq('site_id', SITE).order('name'));
   const F = [{ k: 'name', label: '품명', req: 1 }, { k: 'spec', label: '규격' }, { k: 'unit', label: '단위', def: '개' }, { k: 'min_qty', label: '최소 보유량 (이하면 부족 표시)', type: 'number', def: 0 }, { k: 'location', label: '보관 위치' }, { k: 'note', label: '메모', wide: 1 }];
   const low = i => Number(i.min_qty) > 0 && Number(i.qty) <= Number(i.min_qty);
   M().innerHTML = `<div class="head"><h2>자재 · 비품 재고</h2><div class="ctrls"><input id="sq" placeholder="품명 검색" aria-label="품명 검색"><button class="pri" id="add">+ 품목</button></div></div>
@@ -570,7 +578,7 @@ routes.inventory = async () => {
   ${rows.map(i => `<tr class="${low(i) ? 'low' : ''}" data-name="${esc((i.name + ' ' + (i.spec || '')).toLowerCase())}"><td><button class="tt ghost" style="padding:0;min-height:0;color:inherit" data-ed="${i.id}"><b>${esc(i.name)}</b></button></td><td>${esc(i.spec)}</td><td class="r num">${esc(Number(i.qty))} ${esc(i.unit)}</td><td class="r">${esc(Number(i.min_qty))}</td><td>${esc(i.location)}</td>
   <td class="r"><button data-mv="${i.id}" data-k="입고">입고</button> <button data-mv="${i.id}" data-k="출고">출고</button> <button class="ghost" data-hist="${i.id}">기록</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">등록된 품목이 없습니다. <b>+ 품목</b>으로 추가하세요.</div>'}`;
   $('#sq').oninput = () => { const s = $('#sq').value.trim().toLowerCase(); M().querySelectorAll('#inv tbody tr').forEach(tr => tr.hidden = s && !tr.dataset.name.includes(s)); };
-  $('#add').onclick = () => formModal('품목 추가', [...F, { k: 'qty', label: '현재 수량', type: 'number', def: 0 }], {}, async v => { v.qty = v.qty || 0; v.min_qty = v.min_qty || 0; await q(sb.from('ow_inventory').insert(v)); route(); });
+  $('#add').onclick = () => formModal('품목 추가', [...F, { k: 'qty', label: '현재 수량', type: 'number', def: 0 }], {}, async v => { v.qty = v.qty || 0; v.min_qty = v.min_qty || 0; await q(sb.from('ow_inventory').insert({ ...v, site_id: SITE })); route(); });
   M().querySelectorAll('[data-ed]').forEach(b => b.onclick = () => { const i = rows.find(x => x.id === b.dataset.ed);
     formModal('품목 수정', F, i, async v => { v.min_qty = v.min_qty || 0; await q(sb.from('ow_inventory').update({ ...v, updated_at: new Date().toISOString() }).eq('id', i.id)); route(); },
       [{ label: '삭제', cls: 'ghost danger', onClick: () => { confirmBox(`${i.name} 품목과 입출고 기록을 모두 삭제할까요?`, '삭제', async () => { await q(sb.from('ow_inventory').delete().eq('id', i.id)); route(); }); } }]); });
@@ -585,13 +593,13 @@ routes.inventory = async () => {
 /* ================= 연락처 ================= */
 const CCAT = ['업체','거래처','관공서','직원','기타'];
 routes.contacts = async () => {
-  const rows = await q(sb.from('ow_contacts').select('*').order('name'));
+  const rows = await q(sb.from('ow_contacts').select('*').eq('site_id', SITE).order('name'));
   const F = [{ k: 'name', label: '이름', req: 1 }, { k: 'company', label: '회사 / 소속' }, { k: 'phone', label: '전화번호', type: 'tel' }, { k: 'category', label: '분류', type: 'select', options: CCAT, def: '업체' }, { k: 'note', label: '메모 (취급 품목, 계좌 등)', type: 'textarea', wide: 1 }];
   M().innerHTML = `<div class="head"><h2>연락처</h2><div class="ctrls"><input id="sq" placeholder="이름·회사·메모 검색" aria-label="연락처 검색"><button class="pri" id="add">+ 연락처</button></div></div>
   ${rows.length ? `<ul class="list" id="cl">${rows.map(c => `<li data-s="${esc([c.name, c.company, c.phone, c.note, c.category].join(' ').toLowerCase())}"><div><button class="ghost" style="padding:0;min-height:0;color:inherit" data-ed="${c.id}"><b>${esc(c.name)}</b></button> <span class="pill">${esc(c.category)}</span><div class="meta"><span>${esc(c.company)}</span>${c.note ? `<span>${esc(c.note.slice(0, 50))}</span>` : ''}</div></div>
   ${c.phone ? `<a class="btn" href="tel:${esc(c.phone.replace(/[^0-9+]/g, ''))}">${esc(c.phone)}</a>` : ''}</li>`).join('')}</ul>` : '<div class="empty">등록된 연락처가 없습니다.</div>'}`;
   $('#sq').oninput = () => { const s = $('#sq').value.trim().toLowerCase(); M().querySelectorAll('#cl li').forEach(li => li.hidden = s && !li.dataset.s.includes(s)); };
-  $('#add').onclick = () => formModal('연락처 추가', F, {}, async v => { await q(sb.from('ow_contacts').insert(v)); route(); });
+  $('#add').onclick = () => formModal('연락처 추가', F, {}, async v => { await q(sb.from('ow_contacts').insert({ ...v, site_id: SITE })); route(); });
   M().querySelectorAll('[data-ed]').forEach(b => b.onclick = () => { const c = rows.find(x => x.id === b.dataset.ed);
     formModal('연락처 수정', F, c, async v => { await q(sb.from('ow_contacts').update(v).eq('id', c.id)); route(); },
       [{ label: '삭제', cls: 'ghost danger', onClick: () => { confirmBox(`${c.name} 연락처를 삭제할까요?`, '삭제', async () => { await q(sb.from('ow_contacts').delete().eq('id', c.id)); route(); }); } }]); });
@@ -603,11 +611,11 @@ routes.settings = async () => {
   const lines = a => (a || []).join('\n');
   const parse = t => t.split('\n').map(s => s.trim()).filter(Boolean);
   const admin = isAdmin();
-  const accounts = admin ? await q(sb.from('ow_profiles').select('*').order('created_at')) : [];
-  M().innerHTML = `<div class="head"><h2>설정</h2></div>
-  ${admin ? `<section class="sec"><h3>팀원 계정 <span class="note">${accounts.filter(a => a.active).length}명 사용 중</span></h3>
-    <div class="scroll"><table class="stack acct"><thead><tr><th>이름</th><th>아이디</th><th>권한</th><th>상태</th><th></th></tr></thead><tbody>
-    ${accounts.map(a => `<tr class="${a.active ? '' : 'off'}"><td><b>${esc(a.name)}</b>${a.id === ME.id ? ' <span class="note">(나)</span>' : ''}</td><td>${esc(a.login_id)}</td><td>${a.role === '관리자' ? '<span class="pill acc">관리자</span>' : '직원'}</td><td>${a.active ? '사용 중' : '<span class="pill">사용 중지</span>'}</td>
+  const accounts = admin ? (await q(sb.from('ow_profiles').select('*').order('created_at'))).filter(a => isHQ() ? true : a.site_id === SITE) : [];
+  M().innerHTML = `<div class="head"><h2>설정 <span class="note" style="font-size:16px">${esc(siteName(SITE))}</span></h2>${isHQ() ? '<p class="note">다른 수양관 설정은 오른쪽 위에서 수양관을 바꾼 뒤 고치세요.</p>' : ''}</div>
+  ${admin ? `<section class="sec"><h3>팀원 계정 <span class="note">${isHQ() ? '6개 수양관 전체 · ' : esc(siteName(SITE)) + ' · '}${accounts.filter(a => a.active).length}명 사용 중</span></h3>
+    <div class="scroll"><table class="stack acct"><thead><tr><th>이름</th><th>소속</th><th>아이디</th><th>권한</th><th>상태</th><th></th></tr></thead><tbody>
+    ${accounts.map(a => `<tr class="${a.active ? '' : 'off'}"><td><b>${esc(a.name)}</b>${a.id === ME.id ? ' <span class="note">(나)</span>' : ''}</td><td>${a.site_id ? esc(siteName(a.site_id)) : '<span class="pill acc">본부</span>'}</td><td>${esc(a.login_id)}</td><td>${a.role === '관리자' ? '<span class="pill acc">관리자</span>' : '직원'}</td><td>${a.active ? '사용 중' : '<span class="pill">사용 중지</span>'}</td>
       <td class="r"><button data-acc="${a.id}">관리</button></td></tr>`).join('')}</tbody></table></div>
     <button class="pri" id="accAdd" style="margin-top:10px">+ 팀원 계정 만들기</button>
     <p class="note">팀원은 아이디와 비밀번호로 로그인합니다. 비밀번호를 잊으면 여기서 새로 정해 주세요. 그만둔 사람은 <b>사용 중지</b>하면 로그인할 수 없고, 남긴 기록은 그대로 남습니다.</p></section>`
@@ -623,18 +631,23 @@ routes.settings = async () => {
   if (!admin) { M().querySelectorAll('section.sec input, section.sec textarea, section.sec button').forEach(el => el.disabled = true); return; }
   const done = () => toast('저장했습니다.');
   const ROLE_OPTS = ['직원', '관리자'];
+  const SITE_OPTS = ['본부 (6곳 모두)', ...SITES.map(x => x.name)];
+  const siteFromLabel = l => l.startsWith('본부') ? null : (SITES.find(x => x.name === l) || {}).id;
   const addStaff = async name => { if (name && !(S.staff || []).includes(name)) await saveSetting('staff', [...(S.staff || []), name]); };
   $('#accAdd').onclick = () => formModal('팀원 계정 만들기', [
     { k: 'name', label: '이름', req: 1 }, { k: 'login_id', label: '아이디 (영문 소문자·숫자, 3~20자)', req: 1 },
-    { k: 'password', label: '처음 비밀번호 (6자 이상)', req: 1 }, { k: 'role', label: '권한', type: 'select', options: ROLE_OPTS, def: '직원' }], {},
-    async v => { await adminCall({ action: 'create', ...v, login_id: String(v.login_id).toLowerCase() }); await addStaff(v.name);
+    { k: 'password', label: '처음 비밀번호 (6자 이상)', req: 1 }, { k: 'role', label: '권한', type: 'select', options: ROLE_OPTS, def: '직원' },
+    ...(isHQ() ? [{ k: 'site', label: '소속', type: 'select', options: SITE_OPTS, def: siteName(SITE) }] : [])], {},
+    async v => { const siteId = isHQ() ? siteFromLabel(v.site) : SITE; delete v.site;
+      await adminCall({ action: 'create', ...v, site_id: siteId, login_id: String(v.login_id).toLowerCase() }); if (siteId === SITE) await addStaff(v.name);
       openModal('계정을 만들었습니다', `<p>아래 내용을 <b>${esc(v.name)}</b> 님에게 전해 주세요. 처음 로그인한 뒤 오른쪽 위 <b>비밀번호 변경</b>으로 바꾸게 하세요.</p><div class="kv"><div><span>아이디</span>${esc(String(v.login_id).toLowerCase())}</div><div><span>비밀번호</span>${esc(v.password)}</div></div>`); route(); });
   M().querySelectorAll('[data-acc]').forEach(b => b.onclick = () => {
     const a = accounts.find(x => x.id === b.dataset.acc);
     const m = openModal(`${a.name} (${a.login_id})`, `<div class="form"><label class="f" for="an">이름<input id="an" value="${esc(a.name)}"></label>
-      <label class="f" for="ar">권한<select id="ar">${ROLE_OPTS.map(o => `<option${o === a.role ? ' selected' : ''}>${o}</option>`).join('')}</select></label></div>
+      <label class="f" for="ar">권한<select id="ar">${ROLE_OPTS.map(o => `<option${o === a.role ? ' selected' : ''}>${o}</option>`).join('')}</select></label>
+      ${isHQ() ? `<label class="f" for="as">소속<select id="as">${SITE_OPTS.map(o => `<option${siteFromLabel(o) === a.site_id ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select></label>` : ''}</div>
       <div class="ctrls" style="margin-top:12px"><button id="aSave">이름·권한 저장</button><button id="aPw">비밀번호 새로 정하기</button>${a.id !== ME.id ? `<button id="aAct" class="${a.active ? 'danger' : ''}">${a.active ? '사용 중지' : '다시 사용'}</button>` : ''}</div>`);
-    m.querySelector('#aSave').onclick = async () => { await adminCall({ action: 'update', user_id: a.id, name: m.querySelector('#an').value, role: m.querySelector('#ar').value }); await addStaff(m.querySelector('#an').value.trim()); m.close(); done(); if (a.id === ME.id) { ME = await loadMe(); drawWho(); } route(); };
+    m.querySelector('#aSave').onclick = async () => { await adminCall({ action: 'update', user_id: a.id, name: m.querySelector('#an').value, role: m.querySelector('#ar').value, ...(isHQ() ? { site_id: siteFromLabel(m.querySelector('#as').value) } : {}) }); await addStaff(m.querySelector('#an').value.trim()); m.close(); done(); if (a.id === ME.id) { ME = await loadMe(); drawWho(); } route(); };
     m.querySelector('#aPw').onclick = () => { m.close(); formModal(`${a.name} 비밀번호 새로 정하기`, [{ k: 'password', label: '새 비밀번호 (6자 이상)', req: 1 }], {}, async v => { await adminCall({ action: 'reset_password', user_id: a.id, password: v.password }); openModal('비밀번호를 바꿨습니다', `<p><b>${esc(a.name)}</b> 님에게 새 비밀번호 <b>${esc(v.password)}</b> 를 알려 주세요.</p>`); }); };
     const act = m.querySelector('#aAct');
     if (act) act.onclick = () => { m.close(); confirmBox(a.active ? `${a.name} 님 계정을 사용 중지할까요? 로그인할 수 없게 되고, 남긴 기록은 그대로 남습니다.` : `${a.name} 님 계정을 다시 사용하게 할까요?`, a.active ? '사용 중지' : '다시 사용', async () => { await adminCall({ action: 'update', user_id: a.id, active: !a.active }); done(); route(); }); };
@@ -654,7 +667,11 @@ async function start() {
     if (session) { await sb.auth.signOut(); return showLogin('이 계정은 사용할 수 없습니다. 관리자에게 문의하세요.'); }
     return showLogin();
   }
-  document.body.classList.remove('out'); drawWho();
+  document.body.classList.remove('out');
+  SITES = (await sb.from('ow_sites').select('*').order('sort')).data || [];
+  if (ME.site_id) SITE = ME.site_id;
+  else { let saved = null; try { saved = localStorage.getItem('ow-site'); } catch {} SITE = SITES.some(x => x.id === saved) ? saved : (SITES[0] || {}).id; }
+  drawWho();
   try { await loadSettings(); } catch (e) { console.error(e); }
   route();
 }
