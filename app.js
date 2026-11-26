@@ -16,6 +16,7 @@ const today = () => ymd(new Date());
 const DOW = ['일','월','화','수','목','금','토'];
 const dow = s => DOW[new Date(s + 'T00:00').getDay()] || '';
 const md = s => s ? (+s.slice(5, 7)) + '/' + (+s.slice(8, 10)) : '';
+const lt = iso => { if (!iso) return ''; const d = new Date(iso); return isNaN(d) ? String(iso).slice(0, 16).replace('T', ' ') : `${ymd(d)} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 let MONTH = today().slice(0, 7);
 const mLabel = m => m.slice(0, 4) + '년 ' + (+m.slice(5)) + '월';
 function mRange(m) { const [y, mo] = m.split('-').map(Number); const n = mo === 12 ? `${y + 1}-01` : `${y}-${pad(mo + 1)}`; return [m + '-01', n + '-01']; }
@@ -168,18 +169,42 @@ function approveHTML(ap) {
   return `<div class="approve">${S.roles.map(r => { const a = (ap || {})[r];
     return `<button data-role="${esc(r)}" class="${a ? 'on' : ''}"><span class="t">${esc(r)}</span><span class="s">${a ? `<span class="seal">${esc(a.name)}<br>${esc(md((a.at || '').slice(0, 10)))}</span>` : '<span class="noprint">결재</span>'}</span></button>`; }).join('')}</div>`;
 }
+/* ---------- 수정 요청 (결재자 승인 후 반영) ---------- */
+const CR_LABEL = { ow_logs: '작업 일지', ow_expenses: '지출결의서', ow_checks: '시설 점검' };
+const CR_VIEW = { ow_logs: '#log/', ow_expenses: '#exp/', ow_checks: '#check/' };
+const isChangeApprover = () => isAdmin() || Object.values(S.approvers || {}).some(l => Array.isArray(l) && l.includes(myName()));
+const crTitle = (tbl, x) => tbl === 'ow_logs' ? `${md(x.date)} ${((x.tasks || []).find(t => t.text) || {}).text || '작업 일지'}`
+  : tbl === 'ow_expenses' ? `${md(x.date)} ${x.title || '지출결의서'}` : `${md(x.date)} 점검 (${x.inspector || ''})`;
+async function requestChange(tbl, before, after, action, reason) {
+  const clean = o => { const c = { ...o }; delete c.updated_at; delete c.created_at; return c; };
+  await q(sb.from('ow_change_requests').insert({ site_id: before.site_id || SITE, tbl, record_id: before.id, action, title: crTitle(tbl, after || before),
+    before: clean(before), after: after ? clean({ ...before, ...after }) : null, reason: (reason || '').trim() || null, requested_name: myName() }));
+  toast(`${action} 요청을 올렸습니다. 결재자가 승인하면 반영됩니다.`);
+}
+function askDelete(tbl, row, back) {
+  formModal(`${CR_LABEL[tbl]} 삭제 요청`, [{ k: 'reason', label: '삭제 사유', type: 'textarea', req: 1, wide: 1 }], {},
+    async v => { await requestChange(tbl, row, null, '삭제', v.reason); location.hash = back; });
+}
+async function pendingBanner(tbl, id) {
+  const rows = await q(sb.from('ow_change_requests').select('id,action,requested_name,reason,created_at').eq('record_id', id).eq('status', '대기'));
+  if (!rows.length) return '';
+  return `<div class="panel noprint" style="border-color:var(--acc);margin-bottom:14px"><b style="color:var(--acc)">승인 대기 중인 요청 ${rows.length}건</b>
+    <ul class="list">${rows.map(x => `<li><span>${esc(x.action)} 요청 · ${esc(x.requested_name || '')} · ${esc(lt(x.created_at))}${x.reason ? ' · ' + esc(x.reason) : ''}</span><a href="#requests">처리하기 →</a></li>`).join('')}</ul>
+    <p class="note">승인되기 전까지는 아래 내용이 그대로 유지됩니다.</p></div>`;
+}
+
 /* 결재는 로그인한 본인 이름으로만. 결재자가 지정된 칸은 지정된 사람만, 지정되지 않은 칸은 관리자만 */
 const canSign = r => { const list = S.approvers?.[r] || []; return list.length ? list.includes(myName()) : isAdmin(); };
 function bindApprove(table, row, rerender) {
   M().querySelectorAll('[data-role]').forEach(b => b.onclick = () => {
     const r = b.dataset.role, ap = { ...(row.approvals || {}) };
-    const save = async () => { await q(sb.from(table).update({ approvals: ap }).eq('id', row.id)); row.approvals = ap; rerender(); };
+    const save = async (cancel = false) => { const res = await q(sb.rpc('ow_stamp', { tbl: table, rec: row.id, role: r, cancel })); row.approvals = res || {}; rerender(); };
     if (ap[r]) {
       if (ap[r].uid !== ME.id && ap[r].name !== myName() && !isAdmin()) return toast('다른 사람의 결재는 본인이나 관리자만 취소할 수 있습니다.');
-      confirmBox(`${ap[r].name} 님의 ${r} 결재를 취소할까요?`, '결재 취소', async () => { delete ap[r]; await save(); }); return;
+      confirmBox(`${ap[r].name} 님의 ${r} 결재를 취소할까요?`, '결재 취소', async () => { await save(true); }); return;
     }
     if (!canSign(r)) { const list = S.approvers?.[r] || []; return toast(list.length ? `${r} 결재는 ${list.join(', ')} 님만 할 수 있습니다.` : `${r} 결재자가 아직 지정되지 않았습니다. 관리자가 설정에서 지정하세요.`); }
-    confirmBox(`${myName()} 이름으로 ${r} 결재합니다.`, '결재', async () => { ap[r] = { name: myName(), uid: ME.id, at: new Date().toISOString() }; await save(); toast(r + ' 결재 완료'); });
+    confirmBox(`${myName()} 이름으로 ${r} 결재합니다.`, '결재', async () => { await save(); toast(r + ' 결재 완료'); });
   });
 }
 const lastRole = () => S.roles[S.roles.length - 1];
@@ -196,6 +221,7 @@ async function route() {
   const key = routes[name] ? (NAV[name] || name) : 'home';
   document.querySelectorAll('nav a').forEach(a => a.classList.toggle('on', a.dataset.r === key));
   document.querySelector('nav a.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  refreshBadge();
   try { await fn(arg); }
   catch (e) { console.error(e); M().innerHTML = `<div class="empty">불러오지 못했습니다. 인터넷 연결과 config.js 설정을 확인하세요.<br><small>${esc(e.message || e)}</small></div>`; }
   scrollTo(0, 0);
@@ -205,12 +231,13 @@ addEventListener('hashchange', route);
 /* ================= 홈 ================= */
 routes.home = async () => {
   const [a, b] = mRange(MONTH);
-  const [logs, exps, meals, tasks, inv] = await Promise.all([
+  const [logs, exps, meals, tasks, inv, crs] = await Promise.all([
     q(sb.from('ow_logs').select('id,date,tasks,approvals,place').eq('site_id', SITE).gte('date', a).lt('date', b).order('date', { ascending: false })),
     q(sb.from('ow_expenses').select('id,date,title,total,approvals').eq('site_id', SITE).gte('date', a).lt('date', b).order('date', { ascending: false })),
     q(sb.from('ow_meals').select('count').eq('site_id', SITE).gte('date', a).lt('date', b)),
     q(sb.from('ow_tasks').select('*').eq('site_id', SITE).neq('status', '완료').order('due', { ascending: true, nullsFirst: false }).limit(50)),
-    q(sb.from('ow_inventory').select('id,name,qty,min_qty,unit').eq('site_id', SITE))
+    q(sb.from('ow_inventory').select('id,name,qty,min_qty,unit').eq('site_id', SITE)),
+    q(sb.from('ow_change_requests').select('id').eq('site_id', SITE).eq('status', '대기'))
   ]);
   const low = inv.filter(i => Number(i.qty) <= Number(i.min_qty) && Number(i.min_qty) > 0);
   const mealN = meals.reduce((s, m) => s + m.count, 0);
@@ -220,6 +247,7 @@ routes.home = async () => {
   <div class="kpis">
     <a href="#logs" class="hot"><b class="num">${logs.length}</b><span>작업 일지</span></a>
     <a href="#logs"><b class="num">${pending(logs) + pending(exps)}</b><span>결재 대기 (일지·지출)</span></a>
+    <a href="#requests" class="${crs.length ? 'hot' : ''}"><b class="num">${crs.length}</b><span>수정 승인 대기</span></a>
     <a href="#expenses"><b class="num">${won(exps.reduce((s, e) => s + Number(e.total), 0))}</b><span>지출 합계(원)</span></a>
     <a href="#meals"><b class="num">${mealN}</b><span>식수 · ${won(mealN * (S.meal?.price || 0))}원</span></a>
     <a href="#tasks" class="${over.length ? 'bad' : ''}"><b class="num">${tasks.length}</b><span>남은 할 일${over.length ? ` · 지남 ${over.length}` : ''}</span></a>
@@ -260,7 +288,7 @@ routes.log = async id => {
     const tbl = (head, rows, foot = '') => `<div class="scroll"><table class="stack"><thead><tr>${head.map(h => `<th${h[0] === '#' ? ' class="r"' : ''}>${esc(h.replace('#', ''))}</th>`).join('')}</tr></thead><tbody>${rows || `<tr><td colspan="${head.length}">기록 없음</td></tr>`}</tbody>${foot}</table></div>`;
     const grp = KINDS.map(k => { const ps = (l.photos || []).filter(p => p.kind === k); return ps.length ? `<h4 style="margin:12px 0 8px">${k}</h4><div class="photos">${ps.map(p => `<div class="ph"><img alt="${esc(p.cap)}" src="${esc(fileUrl(p.path))}">${p.cap ? `<div class="in">${esc(p.cap)}</div>` : ''}</div>`).join('')}</div>` : ''; }).join('');
     M().innerHTML = `
-    <div class="head noprint"><a class="btn ghost" href="#logs">← 목록</a><div class="ctrls"><button class="ghost danger" id="del">삭제</button><a class="btn" href="#log-edit/${l.id}">수정</a><button class="pri" onclick="print()">인쇄</button></div></div>
+    <div class="head noprint"><a class="btn ghost" href="#logs">← 목록</a><div class="ctrls"><button class="ghost danger" id="del">삭제 요청</button><a class="btn" href="#log-edit/${l.id}">수정 요청</a><button class="pri" onclick="print()">인쇄</button></div></div>
     <div class="doc">
       <div class="doctop"><h2>작업 일지</h2>${approveHTML(l.approvals)}</div>
       <div class="kv">${[['작업일자', `${l.date} (${dow(l.date)})`], ['날씨', l.weather], ['작성자', l.author], ['작업 장소', l.place], ['작업 구분', l.cat], ['총 인원', (l.crew || []).length + '명'], ['총 작업시간', logHours(l) + '시간'], ['총 자재비', won(logCost(l)) + '원']].map(([k, v]) => `<div><span>${k}</span>${esc(v)}</div>`).join('')}</div>
@@ -273,8 +301,10 @@ routes.log = async id => {
       <section class="sec"><h3><em>7</em>작업 사진</h3>${grp || '<p class="note">사진 없음</p>'}</section>
     </div>`;
     bindApprove('ow_logs', l, render);
-    $('#del').onclick = () => confirmBox('이 일지를 삭제할까요? 되돌릴 수 없습니다.', '삭제', async () => { await q(sb.from('ow_logs').delete().eq('id', l.id)); toast('삭제했습니다.'); location.hash = '#logs'; });
+    $('#del').onclick = () => askDelete('ow_logs', l, '#log/' + l.id);
+    if (banner) M().querySelector('.doc').insertAdjacentHTML('beforebegin', banner);
   };
+  const banner = await pendingBanner('ow_logs', l.id);
   render();
 };
 
@@ -318,7 +348,7 @@ routes['log-edit'] = async id => {
     tasks: [{ text: '', place: '', worker: '', start: '09:00', end: '18:00', status: '진행중' }], crew: [{ name: '', org: '', role: '', start: '09:00', end: '18:00', note: '' }], mats: [], safety: {}, notes: '', plan: '', photos: [], approvals: {} };
   const F = [{ k: 'date', label: '작업일자', type: 'date', req: 1 }, { k: 'weather', label: '날씨', type: 'select', options: WEATHER }, { k: 'author', label: '작성자', list: 'staffList', req: 1 }, { k: 'place', label: '작업 장소' }, { k: 'cat', label: '작업 구분', type: 'select', options: CATS }];
   M().innerHTML = `
-  <div class="head"><h2>${l ? '일지 수정' : '새 작업 일지'}</h2><div class="ctrls"><a class="btn ghost" href="${l ? '#log/' + l.id : '#logs'}">취소</a><button class="pri" id="save">저장</button></div></div>
+  <div class="head"><h2>${l ? '일지 수정 요청' : '새 작업 일지'}</h2><div class="ctrls"><a class="btn ghost" href="${l ? '#log/' + l.id : '#logs'}">취소</a><button class="pri" id="save">저장</button></div></div>
   <section class="sec"><h3>기본 정보</h3><div class="form" id="basic">${F.map(f => fieldHTML(f, d[f.k])).join('')}</div></section>
   <section class="sec"><h3><em>1</em>금일 작업 내용</h3><div id="r1"></div></section>
   <section class="sec"><h3><em>2</em>투입 인원</h3><div id="r2"></div></section>
@@ -327,6 +357,7 @@ routes['log-edit'] = async id => {
   <section class="sec"><h3><em>5</em>특이사항 / 문제점</h3><textarea id="notes">${esc(d.notes)}</textarea></section>
   <section class="sec"><h3><em>6</em>명일 작업 계획</h3><textarea id="plan">${esc(d.plan)}</textarea></section>
   <section class="sec"><h3><em>7</em>작업 사진</h3><div id="ph"></div></section>
+  ${l ? '<section class="sec"><h3>수정 사유 <span class="note">(결재자에게 보입니다)</span></h3><input id="reason" placeholder="예: 작업 시간 정정"></section>' : ''}
   <div class="ctrls" style="justify-content:flex-end;padding-top:16px"><button class="pri" id="save2">저장</button></div>`;
   rowsEditor($('#r1'), d.tasks, [['text','작업 내용','text','wide'],['place','장소'],['worker','작업자','text','staffList'],['start','시작','time'],['end','종료','time'],['status','상태','sel',STAT]], () => ({ text: '', place: '', worker: '', start: '09:00', end: '18:00', status: '진행중' }), r => hrs(r.start, r.end) + '시간');
   rowsEditor($('#r2'), d.crew, [['name','성명','text','staffList'],['org','소속/구분'],['role','담당 작업'],['start','시작','time'],['end','종료','time'],['note','비고']], () => ({ name: '', org: '', role: '', start: '09:00', end: '18:00', note: '' }), r => hrs(r.start, r.end) + '시간');
@@ -339,7 +370,8 @@ routes['log-edit'] = async id => {
     const body = { date: d.date, weather: d.weather, author: d.author, place: d.place, cat: d.cat,
       tasks: d.tasks.filter(t => t.text || t.worker), crew: d.crew.filter(c => c.name), mats: d.mats.filter(m => m.name).map(m => ({ ...m, qty: Number(m.qty) || 0, price: Number(m.price) || 0 })),
       safety: d.safety, notes: d.notes, plan: d.plan, photos: d.photos, updated_at: new Date().toISOString() };
-    const res = l ? await q(sb.from('ow_logs').update(body).eq('id', l.id).select('id').single()) : await q(sb.from('ow_logs').insert({ ...body, site_id: SITE }).select('id').single());
+    if (l) { await requestChange('ow_logs', l, body, '수정', $('#reason').value); location.hash = '#log/' + l.id; return; }
+    const res = await q(sb.from('ow_logs').insert({ ...body, site_id: SITE }).select('id').single());
     toast('저장했습니다.'); location.hash = '#log/' + res.id;
   };
   $('#save').onclick = save; $('#save2').onclick = save;
@@ -385,7 +417,7 @@ routes.exp = async id => {
   const e = await q(sb.from('ow_expenses').select('*').eq('id', id).maybeSingle());
   if (!e) { M().innerHTML = '<div class="empty">결의서를 찾을 수 없습니다.</div>'; return; }
   const render = () => {
-    M().innerHTML = `<div class="head noprint"><a class="btn ghost" href="#expenses">← 목록</a><div class="ctrls"><button class="ghost danger" id="del">삭제</button><a class="btn" href="#exp-edit/${e.id}">수정</a><button class="pri" onclick="print()">인쇄</button></div></div>
+    M().innerHTML = `<div class="head noprint"><a class="btn ghost" href="#expenses">← 목록</a><div class="ctrls"><button class="ghost danger" id="del">삭제 요청</button><a class="btn" href="#exp-edit/${e.id}">수정 요청</a><button class="pri" onclick="print()">인쇄</button></div></div>
     <div class="doc">
       <div class="doctop"><h2>지출결의서</h2>${approveHTML(e.approvals)}</div>
       <div class="kv">${[['부서', e.dept], ['작성자', e.author], ['지출일', e.date], ['거래처', e.vendor], ['결제 방법', e.pay_method], ['작성일', (e.created_at || '').slice(0, 10)]].map(([k, v]) => `<div><span>${k}</span>${esc(v)}</div>`).join('')}</div>
@@ -405,8 +437,10 @@ routes.exp = async id => {
       ${(e.receipts || []).length ? `<section class="sec"><h3>증빙 (영수증)</h3><div class="photos">${e.receipts.map(p => `<div class="ph"><img alt="${esc(p.cap)}" src="${esc(fileUrl(p.path))}">${p.cap ? `<div class="in">${esc(p.cap)}</div>` : ''}</div>`).join('')}</div></section>` : ''}
     </div>`;
     bindApprove('ow_expenses', e, render);
-    $('#del').onclick = () => confirmBox('이 결의서를 삭제할까요? 되돌릴 수 없습니다.', '삭제', async () => { await q(sb.from('ow_expenses').delete().eq('id', e.id)); toast('삭제했습니다.'); location.hash = '#expenses'; });
+    $('#del').onclick = () => askDelete('ow_expenses', e, '#exp/' + e.id);
+    if (banner) M().querySelector('.doc').insertAdjacentHTML('beforebegin', banner);
   };
+  const banner = await pendingBanner('ow_expenses', e.id);
   render();
 };
 routes['exp-edit'] = async id => {
@@ -414,13 +448,13 @@ routes['exp-edit'] = async id => {
   if (id && id !== 'new') e = await q(sb.from('ow_expenses').select('*').eq('id', id).maybeSingle());
   const d = e ? structuredClone(e) : { date: today(), title: '', dept: S.org?.name || '덕정 수양관', author: myName(), vendor: '', pay_method: PAY[0], items: [{ desc: '', qty: 1, price: '', note: '' }], note: '', receipts: [] };
   const F = [{ k: 'title', label: '제목', req: 1, wide: 1 }, { k: 'date', label: '지출일', type: 'date', req: 1 }, { k: 'dept', label: '부서' }, { k: 'author', label: '작성자', list: 'staffList', req: 1 }, { k: 'vendor', label: '거래처' }, { k: 'pay_method', label: '결제 방법', type: 'select', options: PAY }];
-  M().innerHTML = `<div class="head"><h2>${e ? '결의서 수정' : '새 지출결의서'}</h2><div class="ctrls"><a class="btn ghost" href="${e ? '#exp/' + e.id : '#expenses'}">취소</a><button class="pri" id="save">저장</button></div></div>
+  M().innerHTML = `<div class="head"><h2>${e ? '결의서 수정 요청' : '새 지출결의서'}</h2><div class="ctrls"><a class="btn ghost" href="${e ? '#exp/' + e.id : '#expenses'}">취소</a><button class="pri" id="save">저장</button></div></div>
   <section class="sec"><h3>기본 정보</h3><div class="form" id="basic">${F.map(f => fieldHTML(f, d[f.k])).join('')}</div></section>
   <section class="sec"><h3>지출 내역 <span class="note" id="tot"></span></h3>
     <div class="ctrls" style="margin-bottom:12px"><input type="month" id="mm" value="${esc((d.date || today()).slice(0, 7))}" aria-label="식수표 월"><select id="mmode" aria-label="불러오기 방식"><option value="sum">전체 합산 (한 줄)</option><option value="each">1인별 (사람마다 한 줄)</option></select><button type="button" id="fromMeal">식수표에서 수량 불러오기</button><span class="note">고른 달 식수표의 식수를 수량으로, 설정의 1식 단가를 단가로 넣습니다.</span></div>
     <div id="items"></div></section>
   <section class="sec"><h3>비고</h3><textarea id="note">${esc(d.note)}</textarea></section>
-  ${e ? `<section class="sec"><h3>수정 사유 <span class="note">(선택 · 금액이나 내역이 바뀌면 수정 이력에 남습니다)</span></h3><input id="reason" placeholder="예: 식수표 기준으로 재계산"></section>` : ''}
+  ${e ? `<section class="sec"><h3>수정 사유 <span class="note">(결재자에게 보이고, 승인되면 수정 이력에 남습니다)</span></h3><input id="reason" placeholder="예: 식수표 기준으로 재계산"></section>` : ''}
   <section class="sec"><h3>증빙 (영수증 사진)</h3><div id="rc"></div></section>`;
   const tot = () => $('#tot').textContent = '합계 ' + won(expTotal(d.items)) + '원';
   const ed = rowsEditor($('#items'), d.items, [['desc','내용','text','wide'],['qty','수량','number'],['price','단가(원)','number'],['note','비고']], () => ({ desc: '', qty: 1, price: '', note: '' }), r => '금액 ' + won((Number(r.qty) || 0) * (Number(r.price) || 0)) + '원');
@@ -452,17 +486,63 @@ routes['exp-edit'] = async id => {
     const v = readForm($('#basic'), F); if (!v.title || !v.date || !v.author) return toast('제목, 지출일, 작성자를 입력하세요.');
     const items = d.items.filter(i => i.desc).map(i => ({ ...i, qty: Number(i.qty) || 0, price: Number(i.price) || 0 }));
     const body = { ...v, items, total: expTotal(items), note: $('#note').value, receipts: d.receipts, updated_at: new Date().toISOString() };
-    if (e) {
-      const pick = x => JSON.stringify({ items: (x.items || []).map(i => [i.desc || '', Number(i.qty) || 0, Number(i.price) || 0]), total: Number(x.total) || 0 });
-      if (pick(e) !== pick(body)) {
-        const now = new Date(), at = `${ymd(now)}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
-        body.history = [...(e.history || []), { at, by: v.author || '', reason: ($('#reason')?.value || '').trim(),
-          before: { items: e.items || [], total: Number(e.total) || 0, note: e.note || '' }, after: { items, total: body.total, note: body.note } }];
-      }
-    }
-    const res = e ? await q(sb.from('ow_expenses').update(body).eq('id', e.id).select('id').single()) : await q(sb.from('ow_expenses').insert({ ...body, site_id: SITE }).select('id').single());
+    if (e) { await requestChange('ow_expenses', e, body, '수정', $('#reason').value); location.hash = '#exp/' + e.id; return; }
+    const res = await q(sb.from('ow_expenses').insert({ ...body, site_id: SITE }).select('id').single());
     toast('저장했습니다.'); location.hash = '#exp/' + res.id;
   };
+};
+
+/* ================= 승인 요청 ================= */
+const CR_FIELDS = {
+  ow_logs: { date: '작업일자', weather: '날씨', author: '작성자', place: '작업 장소', cat: '작업 구분', tasks: '작업 내용', crew: '투입 인원', mats: '자재·장비', safety: '안전 점검', notes: '특이사항', plan: '명일 계획', photos: '사진' },
+  ow_expenses: { date: '지출일', title: '제목', dept: '부서', author: '작성자', vendor: '거래처', pay_method: '결제 방법', items: '지출 내역', total: '합계(원)', note: '비고', receipts: '영수증' },
+  ow_checks: { date: '점검일', inspector: '점검자', results: '점검 결과', note: '종합 의견' } };
+function crShow(k, v) {
+  if (v === null || v === undefined || v === '') return '—';
+  if (k === 'tasks') return v.map(t => `${t.text || ''} (${t.start || ''}~${t.end || ''}, ${t.status || ''})`).join(' / ') || '없음';
+  if (k === 'crew') return v.map(c => c.name).join(', ') || '없음';
+  if (k === 'mats') return v.map(m => `${m.name} ${m.qty}${m.unit || ''} × ${won(m.price)}`).join(' / ') || '없음';
+  if (k === 'items') return v.map(i => `${i.desc} ${i.qty} × ${won(i.price)}`).join(' / ') || '없음';
+  if (k === 'photos' || k === 'receipts') return `${v.length}장`;
+  if (k === 'safety') return `${Object.values(v).filter(Boolean).length}/4 확인`;
+  if (k === 'results') { const b = Object.values(v).filter(x => x.r === '불량').length; return `${Object.keys(v).length}항목 · 불량 ${b}`; }
+  if (k === 'total') return won(v);
+  return String(v);
+}
+function crDiff(x) {
+  const F = CR_FIELDS[x.tbl] || {};
+  if (x.action === '삭제') return `<p class="danger"><b>이 자료 전체를 삭제합니다.</b></p>`;
+  const norm = (k, v) => { if (v === null || v === undefined || v === '') return null; if (k === 'safety') return Object.keys(v).filter(z => v[z]).sort(); if (Array.isArray(v) && !v.length) return null; if (k === 'total') return Number(v); return v; };
+  const rows = Object.keys(F).filter(k => JSON.stringify(norm(k, x.before?.[k])) !== JSON.stringify(norm(k, x.after?.[k])))
+    .map(k => `<tr><td>${esc(F[k])}</td><td>${esc(crShow(k, x.before?.[k]))}</td><td><b>${esc(crShow(k, x.after?.[k]))}</b></td></tr>`).join('');
+  return rows ? `<div class="scroll"><table class="stack"><thead><tr><th>항목</th><th>지금</th><th>바뀔 내용</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="note">바뀐 내용이 없습니다.</p>';
+}
+async function refreshBadge() {
+  try { const { count } = await sb.from('ow_change_requests').select('id', { count: 'exact', head: true }).eq('site_id', SITE).eq('status', '대기');
+    const a = document.querySelector('nav a[data-r="requests"]'); if (a) a.textContent = count ? `승인 요청 (${count})` : '승인 요청'; } catch {}
+}
+routes.requests = async () => {
+  const rows = await q(sb.from('ow_change_requests').select('*').eq('site_id', SITE).order('created_at', { ascending: false }).limit(60));
+  const pend = rows.filter(x => x.status === '대기'), done = rows.filter(x => x.status !== '대기');
+  const can = isChangeApprover();
+  const card = x => `<div class="panel" style="margin-bottom:12px">
+    <h3><span>${x.action === '삭제' ? '<span class="pill bad">삭제</span>' : '<span class="pill acc">수정</span>'} ${esc(CR_LABEL[x.tbl])} · <a href="${CR_VIEW[x.tbl]}${esc(x.record_id)}">${esc(x.title || '')}</a></span>
+      ${x.status === '대기' ? '<span class="pill">대기</span>' : x.status === '승인' ? '<span class="pill ok">승인</span>' : '<span class="pill bad">반려</span>'}</h3>
+    <p class="meta"><span>요청 ${esc(x.requested_name || '')} · ${esc(lt(x.created_at))}</span>${x.reason ? `<span>사유: ${esc(x.reason)}</span>` : ''}
+      ${x.decided_name ? `<span>${esc(x.status)} ${esc(x.decided_name)} · ${esc(lt(x.decided_at))}</span>` : ''}${x.comment ? `<span>의견: ${esc(x.comment)}</span>` : ''}</p>
+    ${crDiff(x)}
+    ${x.status === '대기' ? `<div class="ctrls" style="margin-top:10px;justify-content:flex-end">
+      ${x.requested_by === ME.id ? `<button class="ghost" data-cancel="${x.id}">요청 취소</button>` : ''}
+      ${can ? `<button class="danger" data-rej="${x.id}">반려</button><button class="pri" data-ok="${x.id}">승인</button>` : ''}</div>` : ''}</div>`;
+  M().innerHTML = `<div class="head"><h2>승인 요청 <span class="note" style="font-size:16px">${esc(siteName(SITE))}</span></h2></div>
+    <p class="note">작업 일지·지출결의서·시설 점검을 고치거나 지우면 이곳에 요청이 올라옵니다. ${can ? '결재자로서 승인하면 바로 반영되고, 반려하면 그대로 남습니다.' : '이 수양관의 결재자나 관리자가 승인하면 반영됩니다.'}</p>
+    <h3 style="margin:16px 0 10px">대기 ${pend.length}건</h3>${pend.map(card).join('') || '<div class="empty">대기 중인 요청이 없습니다.</div>'}
+    ${done.length ? `<h3 style="margin:22px 0 10px">처리 완료 (최근)</h3>${done.map(card).join('')}` : ''}`;
+  const decide = async (id, ok, note) => { await q(sb.rpc('ow_decide_change', { req: id, approve: ok, note: note || null })); toast(ok ? '승인했습니다. 반영됐습니다.' : '반려했습니다.'); route(); refreshBadge(); };
+  M().querySelectorAll('[data-ok]').forEach(b => b.onclick = () => { const x = rows.find(r => r.id === b.dataset.ok);
+    confirmBox(`${x.title} ${x.action} 요청을 승인할까요? ${x.action === '삭제' ? '자료가 삭제되며 되돌릴 수 없습니다.' : '바로 반영됩니다.'}`, '승인', () => decide(x.id, true)); });
+  M().querySelectorAll('[data-rej]').forEach(b => b.onclick = () => formModal('반려', [{ k: 'note', label: '반려 사유 (요청자에게 보입니다)', type: 'textarea', wide: 1 }], {}, v => decide(b.dataset.rej, false, v.note)));
+  M().querySelectorAll('[data-cancel]').forEach(b => b.onclick = () => confirmBox('이 요청을 취소할까요?', '요청 취소', async () => { await q(sb.from('ow_change_requests').delete().eq('id', b.dataset.cancel)); route(); refreshBadge(); }));
 };
 
 /* ================= 식수표 ================= */
@@ -540,29 +620,32 @@ routes.check = async id => {
   const r = await q(sb.from('ow_checks').select('*').eq('id', id).maybeSingle());
   if (!r) { M().innerHTML = '<div class="empty">기록을 찾을 수 없습니다.</div>'; return; }
   const items = r.results || {};
-  M().innerHTML = `<div class="head noprint"><a class="btn ghost" href="#checks">← 목록</a><div class="ctrls"><button class="ghost danger" id="del">삭제</button><a class="btn" href="#check-edit/${r.id}">수정</a><button class="pri" onclick="print()">인쇄</button></div></div>
+  M().innerHTML = `<div class="head noprint"><a class="btn ghost" href="#checks">← 목록</a><div class="ctrls"><button class="ghost danger" id="del">삭제 요청</button><a class="btn" href="#check-edit/${r.id}">수정 요청</a><button class="pri" onclick="print()">인쇄</button></div></div>
   <div class="doc"><div class="doctop"><h2>시설 점검표</h2></div>
   <div class="kv"><div><span>점검일</span>${esc(r.date)} (${dow(r.date)})</div><div><span>점검자</span>${esc(r.inspector)}</div><div><span>시설</span>${esc(S.org?.name || '')}</div></div>
   <div class="scroll" style="margin-top:14px"><table class="stack"><thead><tr><th>구분</th><th>점검 항목</th><th>결과</th><th>조치 내용</th></tr></thead><tbody>
   ${Object.values(items).map(x => `<tr><td>${esc(x.area)}</td><td>${esc(x.item)}</td><td>${x.r === '불량' ? '<span class="pill bad">불량</span>' : x.r === '조치완료' ? '<span class="pill acc">조치완료</span>' : '양호'}</td><td>${esc(x.note)}</td></tr>`).join('')}</tbody></table></div>
   ${r.note ? `<section class="sec"><h3>종합 의견</h3><p class="pre">${esc(r.note)}</p></section>` : ''}</div>`;
-  $('#del').onclick = () => confirmBox('이 점검 기록을 삭제할까요?', '삭제', async () => { await q(sb.from('ow_checks').delete().eq('id', r.id)); location.hash = '#checks'; });
+  $('#del').onclick = () => askDelete('ow_checks', r, '#check/' + r.id);
+  const banner = await pendingBanner('ow_checks', r.id); if (banner) M().querySelector('.doc').insertAdjacentHTML('beforebegin', banner);
 };
 routes['check-edit'] = async id => {
   let r; if (id && id !== 'new') r = await q(sb.from('ow_checks').select('*').eq('id', id).maybeSingle());
   const list = r ? Object.values(r.results || {}) : (S.check_items || []).map(x => ({ area: x.area, item: x.item, r: '양호', note: '' }));
-  M().innerHTML = `<div class="head"><h2>${r ? '점검 기록 수정' : '시설 점검'}</h2><div class="ctrls"><a class="btn ghost" href="${r ? '#check/' + r.id : '#checks'}">취소</a><button class="pri" id="save">저장</button></div></div>
+  M().innerHTML = `<div class="head"><h2>${r ? '점검 기록 수정 요청' : '시설 점검'}</h2><div class="ctrls"><a class="btn ghost" href="${r ? '#check/' + r.id : '#checks'}">취소</a><button class="pri" id="save">저장</button></div></div>
   <div class="form" id="basic">${fieldHTML({ k: 'date', label: '점검일', type: 'date', req: 1 }, r?.date || today())}${fieldHTML({ k: 'inspector', label: '점검자', list: 'staffList', req: 1 }, r?.inspector || myName())}</div>
   <section class="sec"><h3>점검 항목 <span class="note">(항목은 설정에서 바꿉니다)</span></h3>
   ${list.map((x, i) => `<div class="chk"><div><span class="pill">${esc(x.area)}</span> ${esc(x.item)}</div><div class="seg" role="radiogroup">${CRES.map(o => `<label class="${o === '불량' ? 'b' : ''}"><input type="radio" name="c${i}" value="${o}"${x.r === o ? ' checked' : ''}><span>${o}</span></label>`).join('')}</div>
     <input class="wide" data-n="${i}" placeholder="조치 내용 / 메모" value="${esc(x.note)}"></div>`).join('') || '<p class="note">설정에서 점검 항목을 먼저 넣어 주세요.</p>'}</section>
-  <section class="sec"><h3>종합 의견</h3><textarea id="note">${esc(r?.note || '')}</textarea></section>`;
+  <section class="sec"><h3>종합 의견</h3><textarea id="note">${esc(r?.note || '')}</textarea></section>
+  ${r ? '<section class="sec"><h3>수정 사유 <span class="note">(결재자에게 보입니다)</span></h3><input id="reason" placeholder="예: 점검 결과 정정"></section>' : ''}`;
   $('#save').onclick = async () => {
     const date = M().querySelector('[data-k="date"]').value, inspector = M().querySelector('[data-k="inspector"]').value.trim();
     if (!date || !inspector) return toast('점검일과 점검자를 입력하세요.');
     const results = {}; list.forEach((x, i) => { results[ckey(x, i)] = { area: x.area, item: x.item, r: M().querySelector(`[name="c${i}"]:checked`)?.value || '양호', note: M().querySelector(`[data-n="${i}"]`).value }; });
     const body = { date, inspector, results, note: $('#note').value };
-    const res = r ? await q(sb.from('ow_checks').update(body).eq('id', r.id).select('id').single()) : await q(sb.from('ow_checks').insert({ ...body, site_id: SITE }).select('id').single());
+    if (r) { await requestChange('ow_checks', r, body, '수정', $('#reason').value); location.hash = '#check/' + r.id; return; }
+    const res = await q(sb.from('ow_checks').insert({ ...body, site_id: SITE }).select('id').single());
     toast('저장했습니다.'); location.hash = '#check/' + res.id;
   };
 };
