@@ -459,19 +459,18 @@ routes['exp-edit'] = async id => {
   const tot = () => $('#tot').textContent = '합계 ' + won(expTotal(d.items)) + '원';
   const ed = rowsEditor($('#items'), d.items, [['desc','내용','text','wide'],['qty','수량','number'],['price','단가(원)','number'],['note','비고']], () => ({ desc: '', qty: 1, price: '', note: '' }), r => '금액 ' + won((Number(r.qty) || 0) * (Number(r.price) || 0)) + '원');
   $('#items').addEventListener('rowschange', tot); tot();
-  $('#fromMeal').onclick = async () => {
-    const m = $('#mm').value; if (!m) return toast('불러올 달을 고르세요.');
+  const isMeal = x => (x.note || '').includes('식수표') || /식대/.test(x.desc || '');
+  const loadMeal = async (m, mode, quiet) => {
     const [a, b] = mRange(m);
     const rows = await q(sb.from('ow_meals').select('person,count').eq('site_id', SITE).gte('date', a).lt('date', b));
     const cnt = {}; rows.forEach(r => cnt[r.person] = (cnt[r.person] || 0) + r.count);
     const people = [...new Set([...(S.meal?.people || []), ...Object.keys(cnt)])].filter(p => cnt[p]);
-    if (!people.length) return toast(mLabel(m) + ' 식수표에 입력된 식수가 없습니다.');
+    if (!people.length) { if (!quiet) toast(mLabel(m) + ' 식수표에 입력된 식수가 없습니다.'); return false; }
     const price = Number(S.meal?.price) || 0;
     const total = people.reduce((s, p) => s + cnt[p], 0);
-    const isMeal = x => (x.note || '').includes('식수표') || /식대/.test(x.desc || '');
     // 빈 줄과 이전에 불러온 식대 줄은 지우고 새로 넣기
     for (let i = d.items.length - 1; i >= 0; i--) { const x = d.items[i]; if ((!x.desc && !Number(x.price)) || isMeal(x)) d.items.splice(i, 1); }
-    if ($('#mmode').value === 'sum') {
+    if (mode === 'sum') {
       d.items.unshift({ desc: `${mLabel(m)} 직원 식대`, qty: total, price, note: `식수표 합산 (${people.map(p => `${p} ${cnt[p]}식`).join(', ')})` });
     } else {
       people.slice().reverse().forEach(p => d.items.unshift({ desc: `${p} 식대`, qty: cnt[p], price, note: `${mLabel(m)} 식수표` }));
@@ -480,10 +479,17 @@ routes['exp-edit'] = async id => {
     setIf('title', `${mLabel(m)} 직원 식대`); setIf('vendor', S.meal?.place || '');
     ed.redraw();
     toast(`${mLabel(m)} 식수표에서 ${people.length}명, 총 ${total}식을 불러왔습니다.`);
+    return true;
   };
+  $('#fromMeal').onclick = () => { const m = $('#mm').value; if (!m) return toast('불러올 달을 고르세요.'); loadMeal(m, $('#mmode').value); };
   photoEditor($('#rc'), d.receipts, 'receipts', false);
   $('#save').onclick = async () => {
     const v = readForm($('#basic'), F); if (!v.title || !v.date || !v.author) return toast('제목, 지출일, 작성자를 입력하세요.');
+    // 식대 결의서인데 식수 줄이 없으면 그 달 식수표를 자동으로 불러옴
+    if (/식대/.test(v.title) && !d.items.some(x => isMeal(x) && Number(x.qty) > 0)) {
+      const ok = await loadMeal(v.date.slice(0, 7), 'sum', true);
+      if (ok) { const f = readForm($('#basic'), F); Object.assign(v, { vendor: v.vendor || f.vendor }); }
+    }
     const items = d.items.filter(i => i.desc).map(i => ({ ...i, qty: Number(i.qty) || 0, price: Number(i.price) || 0 }));
     const body = { ...v, items, total: expTotal(items), note: $('#note').value, receipts: d.receipts, updated_at: new Date().toISOString() };
     if (e) { await requestChange('ow_expenses', e, body, '수정', $('#reason').value); location.hash = '#exp/' + e.id; return; }
