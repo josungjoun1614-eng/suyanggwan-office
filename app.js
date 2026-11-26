@@ -93,13 +93,13 @@ function drawWho() {
 }
 
 /* ---------- 설정 ---------- */
-const S_DEFAULT = { org: { name: '덕정 수양관' }, roles: ['담당','팀장','총괄부장','사무처장'], approvers: {}, staff: [], meal: { people: [], price: 0, place: '' }, check_items: [] };
+const S_DEFAULT = { org: { name: '' }, roles: ['담당','팀장','총괄부장','사무처장'], approvers: {}, staff: [], meal: { people: [], price: 0, place: '' }, check_items: [] };
 let S = { ...S_DEFAULT };
 async function loadSettings() {
   const rows = await q(sb.from('ow_settings').select('key,value').eq('site_id', SITE));
   S = { ...S_DEFAULT };
   for (const r of rows) S[r.key] = r.value;
-  $('#orgName').textContent = S.org?.name || '수양관';
+  $('#orgName').textContent = S.org?.name || siteName(SITE) || '수양관 사무 자동화';
   $('#staffList').innerHTML = (S.staff || []).map(n => `<option value="${esc(n)}">`).join('');
 }
 async function saveSetting(k, v) { await q(sb.from('ow_settings').upsert({ site_id: SITE, key: k, value: v, updated_at: new Date().toISOString() }, { onConflict: 'site_id,key' })); S[k] = v; }
