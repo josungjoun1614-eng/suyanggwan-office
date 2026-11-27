@@ -214,7 +214,7 @@ const pending = rows => rows.filter(r => !(r.approvals || {})[lastRole()]).lengt
 const stampsHTML = ap => `<div class="stamps">${S.roles.map(r => `<i class="${(ap || {})[r] ? 'on' : ''}">${esc(r)}</i>`).join('')}</div>`;
 
 /* ---------- 라우터 ---------- */
-const NAV = { plan: 'plans', 'plan-edit': 'plans', leave: 'leaves', 'leave-edit': 'leaves', log: 'logs', 'log-edit': 'logs', exp: 'expenses', 'exp-edit': 'expenses', check: 'checks', 'check-edit': 'checks' };
+const NAV = { doc: 'docs', 'doc-edit': 'docs', plan: 'plans', 'plan-edit': 'plans', leave: 'leaves', 'leave-edit': 'leaves', log: 'logs', 'log-edit': 'logs', exp: 'expenses', 'exp-edit': 'expenses', check: 'checks', 'check-edit': 'checks' };
 const routes = {};
 async function route() {
   if (!ME) return;
@@ -233,14 +233,16 @@ addEventListener('hashchange', route);
 /* ================= 홈 ================= */
 routes.home = async () => {
   const [a, b] = mRange(MONTH);
-  const [logs, exps, meals, tasks, inv, crs] = await Promise.all([
+  const [logs, exps, meals, tasks, inv, crs, docsSoon] = await Promise.all([
     q(sb.from('ow_logs').select('id,date,tasks,approvals,place').eq('site_id', SITE).gte('date', a).lt('date', b).order('date', { ascending: false })),
     q(sb.from('ow_expenses').select('id,date,title,total,approvals').eq('site_id', SITE).gte('date', a).lt('date', b).order('date', { ascending: false })),
     q(sb.from('ow_meals').select('count').eq('site_id', SITE).gte('date', a).lt('date', b)),
     q(sb.from('ow_tasks').select('*').eq('site_id', SITE).neq('status', '완료').order('due', { ascending: true, nullsFirst: false }).limit(50)),
     q(sb.from('ow_inventory').select('id,name,qty,min_qty,unit').eq('site_id', SITE)),
-    q(sb.from('ow_change_requests').select('id').eq('site_id', SITE).eq('status', '대기'))
+    q(sb.from('ow_change_requests').select('id').eq('site_id', SITE).eq('status', '대기')),
+    q(sb.from('ow_docs').select('id,category,title,holder,expires').eq('site_id', SITE).not('expires', 'is', null).lte('expires', addDays(today(), 60)).order('expires'))
   ]);
+  const soon = docsSoon;
   const low = inv.filter(i => Number(i.qty) <= Number(i.min_qty) && Number(i.min_qty) > 0);
   const mealN = meals.reduce((s, m) => s + m.count, 0);
   const t0 = today(), over = tasks.filter(t => t.due && t.due < t0);
@@ -254,11 +256,13 @@ routes.home = async () => {
     <a href="#meals"><b class="num">${mealN}</b><span>식수 · ${won(mealN * (S.meal?.price || 0))}원</span></a>
     <a href="#tasks" class="${over.length ? 'bad' : ''}"><b class="num">${tasks.length}</b><span>남은 할 일${over.length ? ` · 지남 ${over.length}` : ''}</span></a>
     <a href="#inventory" class="${low.length ? 'bad' : ''}"><b class="num">${low.length}</b><span>재고 부족</span></a>
+    <a href="#docs" class="${soon.some(d => d.expires < today()) ? 'bad' : soon.length ? 'hot' : ''}"><b class="num">${soon.length}</b><span>서류 만료 임박·지남</span></a>
   </div>
   <div class="cols">
     <div class="panel"><h3>최근 작업 일지 <a href="#logs">전체 보기</a></h3><ul class="list">${logs.slice(0, 6).map(l => { const t = (l.tasks || []).find(x => x.text) || {}; return `<li><a href="#log/${l.id}">${esc(md(l.date))} ${esc(t.text || '(내용 없음)')}</a>${(l.approvals || {})[lastRole()] ? '<span class="pill ok">결재 완료</span>' : '<span class="pill">결재 대기</span>'}</li>`; }).join('') || '<li class="note">이번 달 일지가 없습니다.</li>'}</ul></div>
     <div class="panel"><h3>할 일 <a href="#tasks">전체 보기</a></h3><ul class="list">${tasks.slice(0, 6).map(t => `<li><span>${esc(t.title)}${t.assignee ? ` <span class="note">· ${esc(t.assignee)}</span>` : ''}</span><span class="due ${t.due && t.due < t0 ? 'over' : ''}">${t.due ? esc(md(t.due)) : ''}</span></li>`).join('') || '<li class="note">남은 할 일이 없습니다.</li>'}</ul></div>
     <div class="panel"><h3>지출결의서 <a href="#expenses">전체 보기</a></h3><ul class="list">${exps.slice(0, 6).map(e => `<li><a href="#exp/${e.id}">${esc(md(e.date))} ${esc(e.title)}</a><span class="num">${won(e.total)}원</span></li>`).join('') || '<li class="note">이번 달 지출결의서가 없습니다.</li>'}</ul></div>
+    <div class="panel"><h3>건물 관리 서류 만료 <a href="#docs">전체 보기</a></h3><ul class="list">${soon.slice(0, 6).map(d => `<li><a href="#doc/${d.id}">${esc(d.title)}${d.holder ? ` <span class="note">· ${esc(d.holder)}</span>` : ''}</a>${ddayPill(d.expires)}</li>`).join('') || '<li class="note">60일 안에 만료되는 서류가 없습니다.</li>'}</ul></div>
     <div class="panel"><h3>재고 부족 <a href="#inventory">재고 보기</a></h3><ul class="list">${low.map(i => `<li><span>${esc(i.name)}</span><span class="danger">${esc(i.qty)} / 최소 ${esc(i.min_qty)} ${esc(i.unit || '')}</span></li>`).join('') || '<li class="note">부족한 품목이 없습니다.</li>'}</ul></div>
   </div>`;
   bindMonth();
@@ -748,6 +752,86 @@ routes['leave-edit'] = async id => {
     v.half = v.half === '없음' ? null : v.half; if (v.half) v.end_date = v.start_date;
     if (l) { await q(sb.from('ow_leaves').update({ ...v, updated_at: new Date().toISOString() }).eq('id', l.id)); toast('저장했습니다.'); location.hash = '#leave/' + l.id; }
     else { const r = await q(sb.from('ow_leaves').insert({ ...v, site_id: SITE }).select('id').single()); toast('신청했습니다. 결재자에게 알려 주세요.'); location.hash = '#leave/' + r.id; }
+  };
+};
+
+/* ================= 건물 관리 서류 (자격증·법정 교육·법정 점검·안전진단·소방 계획) ================= */
+const DOCS_BUCKET = 'ow-docs';
+const DCATS = ['자격증', '법정 교육', '법정 점검', '안전진단', '소방 계획', '인허가·보험', '계약·용역', '기타'];
+const DTEMPLATE = [
+  ['자격증', '소방안전관리자', '선임 후 2년마다 실무교육'], ['자격증', '전기안전관리자', '선임 유지'], ['자격증', '위험물안전관리자', '선임 유지'], ['자격증', '보일러(에너지관리) 자격', ''],
+  ['법정 교육', '소방안전관리자 실무교육', '2년'], ['법정 교육', '전기안전관리자 직무교육', '3년'], ['법정 교육', '산업안전보건교육 (근로자)', '분기·연간'], ['법정 교육', '직장 내 성희롱 예방교육', '1년'], ['법정 교육', '개인정보보호 교육', '1년'], ['법정 교육', '장애인 인식개선 교육', '1년'], ['법정 교육', '퇴직연금 교육', '1년'],
+  ['법정 점검', '소방시설 작동점검', '1년'], ['법정 점검', '소방시설 종합점검', '1년 (대상 건물)'], ['법정 점검', '전기설비 정기검사·점검', '3년 / 월차 점검'], ['법정 점검', '승강기 정기검사', '1년'], ['법정 점검', '가스시설 정기검사', '1년'], ['법정 점검', '저수조 청소·수질검사', '반기 / 1년'], ['법정 점검', '정화조 청소·방류수 검사', '1년'], ['법정 점검', '보일러 계속사용검사', '1년'],
+  ['안전진단', '건축물 정기 안전점검', '반기'], ['안전진단', '정밀안전점검·진단', '대상 시설별'],
+  ['소방 계획', '소방계획서', '1년'], ['소방 계획', '자위소방대 편성표', '변경 시'], ['소방 계획', '소방훈련·교육 실시 기록', '연 1회 이상'],
+  ['인허가·보험', '건축물대장', ''], ['인허가·보험', '화재보험(다중이용시설 등)', '1년'], ['인허가·보험', '영업·시설 신고증', '']
+];
+const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return ymd(x); };
+const dday = d => d ? Math.round((new Date(d) - new Date(today())) / 864e5) : null;
+const ddayPill = d => { const n = dday(d); if (n === null) return ''; return n < 0 ? `<span class="pill bad">${-n}일 지남</span>` : n <= 30 ? `<span class="pill bad">D-${n}</span>` : n <= 60 ? `<span class="pill acc">D-${n}</span>` : `<span class="pill ok">D-${n}</span>`; };
+const docUrl = async path => { const { data, error } = await sb.storage.from(DOCS_BUCKET).createSignedUrl(path, 600); if (error) throw error; return data.signedUrl; };
+let DCAT = '전체';
+routes.docs = async () => {
+  const all = await q(sb.from('ow_docs').select('*').eq('site_id', SITE).order('category').order('expires', { ascending: true, nullsFirst: false }));
+  const rows = DCAT === '전체' ? all : all.filter(d => d.category === DCAT);
+  const over = all.filter(d => d.expires && dday(d.expires) < 0).length, d30 = all.filter(d => d.expires && dday(d.expires) >= 0 && dday(d.expires) <= 30).length, d60 = all.filter(d => d.expires && dday(d.expires) > 30 && dday(d.expires) <= 60).length;
+  M().innerHTML = `<div class="head"><h2>건물 관리 서류</h2><div class="ctrls">${all.length ? '' : '<button id="tpl">기본 항목 불러오기</button>'}<a class="btn pri" href="#doc-edit/new">+ 서류 등록</a></div></div>
+  <div class="kpis"><div class="hot"><b class="num">${all.length}</b><span>등록 서류</span></div><div class="${over ? 'bad' : ''}"><b class="num">${over}</b><span>기한 지남</span></div><div class="${d30 ? 'bad' : ''}"><b class="num">${d30}</b><span>30일 안에 만료</span></div><div><b class="num">${d60}</b><span>60일 안에 만료</span></div></div>
+  <div class="ctrls" style="margin:4px 0 12px;flex-wrap:wrap" role="group" aria-label="분류">${['전체', ...DCATS].map(k => `<button type="button" class="${k === DCAT ? 'pri' : 'ghost'}" data-dc="${k}">${k}${k !== '전체' ? ` <small>${all.filter(d => d.category === k).length || ''}</small>` : ''}</button>`).join('')}</div>
+  ${rows.length ? `<div class="scroll"><table class="stack"><thead><tr><th>분류</th><th>서류명</th><th>대상·담당</th><th>기관</th><th>취득·시행일</th><th>만료·다음 예정일</th><th>상태</th><th>첨부</th></tr></thead><tbody>${rows.map(d => `<tr><td>${esc(d.category)}</td><td><a href="#doc/${d.id}"><b>${esc(d.title)}</b></a>${d.cycle ? `<br><small class="note">주기 ${esc(d.cycle)}</small>` : ''}</td><td>${esc(d.holder || '')}</td><td>${esc(d.org || '')}</td><td>${esc(d.issued || '')}</td><td>${esc(d.expires || '')}</td><td>${d.expires ? ddayPill(d.expires) : '<span class="pill">기한 없음</span>'}</td><td>${(d.files || []).length ? `📎 ${d.files.length}` : ''}</td></tr>`).join('')}</tbody></table></div>` : `<div class="empty">${DCAT === '전체' ? '등록된 서류가 없습니다. <b>기본 항목 불러오기</b>로 자주 쓰는 법정 서류 목록을 한 번에 넣을 수 있습니다.' : DCAT + ' 서류가 없습니다.'}</div>`}`;
+  M().querySelectorAll('[data-dc]').forEach(b => b.onclick = () => { DCAT = b.dataset.dc; route(); });
+  const t = $('#tpl'); if (t) t.onclick = () => confirmBox(`자격증·법정 교육·법정 점검·소방 계획 등 ${DTEMPLATE.length}개 기본 항목을 넣을까요? 날짜와 첨부는 비어 있으니 하나씩 채우면 됩니다. 필요 없는 항목은 관리자가 지울 수 있습니다.`, '넣기', async () => {
+    await q(sb.from('ow_docs').insert(DTEMPLATE.map(([category, title, cycle]) => ({ site_id: SITE, category, title, cycle: cycle || null })))); toast('기본 항목을 넣었습니다.'); route(); });
+};
+routes.doc = async id => {
+  const d = await q(sb.from('ow_docs').select('*').eq('id', id).maybeSingle());
+  if (!d) { M().innerHTML = '<div class="empty">서류를 찾을 수 없습니다.</div>'; return; }
+  M().innerHTML = `<div class="head"><a class="btn ghost" href="#docs">← 목록</a><div class="ctrls">${isAdmin() ? '<button class="ghost danger" id="del">삭제</button>' : ''}<a class="btn pri" href="#doc-edit/${d.id}">수정·갱신</a></div></div>
+  <div class="doc"><div class="doctop"><h2>${esc(d.title)}</h2>${d.expires ? ddayPill(d.expires) : ''}</div>
+  <div class="kv">${[['분류', d.category], ['대상·담당', d.holder], ['발급·시행 기관', d.org], ['취득·시행일', d.issued], ['만료·다음 예정일', d.expires], ['주기', d.cycle], ['최근 수정', lt(d.updated_at)]].map(([k, v]) => `<div><span>${k}</span>${esc(v || '')}</div>`).join('')}</div>
+  ${d.note ? `<section class="sec"><h3>메모</h3><p class="pre">${esc(d.note)}</p></section>` : ''}
+  <section class="sec"><h3>첨부 서류</h3>${(d.files || []).length ? `<ul class="list">${d.files.map((f, i) => `<li><span>${/^image\//.test(f.type || '') ? '🖼️' : '📄'} ${esc(f.name)}</span><button class="ghost" data-open="${i}">열기</button></li>`).join('')}</ul>` : '<p class="note">첨부된 파일이 없습니다. <b>수정·갱신</b>에서 PDF·사진·한글·엑셀 파일을 올릴 수 있습니다.</p>'}</section></div>`;
+  M().querySelectorAll('[data-open]').forEach(b => b.onclick = async () => { const w = window.open('', '_blank'); try { const u = await docUrl(d.files[+b.dataset.open].path); if (w) w.location = u; else location.href = u; } catch (e) { w && w.close(); toast('파일을 열지 못했습니다: ' + e.message); } });
+  const del = $('#del'); if (del) del.onclick = () => confirmBox(`'${d.title}' 서류를 삭제할까요? 첨부 파일도 함께 지워집니다.`, '삭제', async () => {
+    if ((d.files || []).length) await sb.storage.from(DOCS_BUCKET).remove(d.files.map(f => f.path));
+    await q(sb.from('ow_docs').delete().eq('id', d.id)); toast('삭제했습니다.'); location.hash = '#docs'; });
+};
+routes['doc-edit'] = async id => {
+  let d0 = null;
+  if (id && id !== 'new') { d0 = await q(sb.from('ow_docs').select('*').eq('id', id).maybeSingle()); if (!d0) { M().innerHTML = '<div class="empty">서류를 찾을 수 없습니다.</div>'; return; } }
+  const d = d0 ? structuredClone(d0) : { category: DCAT !== '전체' ? DCAT : DCATS[0], title: '', holder: '', org: '', issued: '', expires: '', cycle: '', files: [], note: '' };
+  d.files = d.files || [];
+  const removed = [];
+  const F = [{ k: 'category', label: '분류', type: 'select', options: DCATS, req: 1 }, { k: 'title', label: '서류명', req: 1, wide: 1 }, { k: 'holder', label: '대상·담당 (자격증 소지자, 교육 이수자 등)', list: 'staffList' }, { k: 'org', label: '발급·시행 기관' },
+    { k: 'issued', label: '취득·시행일', type: 'date' }, { k: 'expires', label: '만료·다음 예정일', type: 'date' }, { k: 'cycle', label: '주기 (예: 1년, 2년, 반기)' }, { k: 'note', label: '메모', type: 'textarea', wide: 1 }];
+  M().innerHTML = `<div class="head"><h2>${d0 ? '서류 수정·갱신' : '서류 등록'}</h2><div class="ctrls"><a class="btn ghost" href="${d0 ? '#doc/' + d0.id : '#docs'}">취소</a><button class="pri" id="save">저장</button></div></div>
+  <div class="form" id="basic">${F.map(f => fieldHTML(f, d[f.k])).join('')}</div>
+  <section class="sec"><h3>첨부 서류 <span class="note">PDF·사진·한글·엑셀·워드, 파일당 20MB까지 · 해당 수양관 로그인 사용자만 열람</span></h3><div id="files"></div>
+  <label class="drop" style="margin-top:10px"><b>파일 올리기</b><span>자격증 사본, 교육 이수증, 점검 결과서, 소방계획서 등</span><input id="fin" type="file" accept=".pdf,.hwp,.hwpx,.xlsx,.docx,image/*" multiple hidden></label></section>
+  <p class="note">갱신할 때는 새 취득·시행일과 만료일로 바꾸고 새 서류를 올리세요. 예전 파일은 남겨 두거나 빼기로 지울 수 있습니다.</p>`;
+  const drawFiles = () => $('#files').innerHTML = d.files.length ? `<ul class="list">${d.files.map((f, i) => `<li><span>${/^image\//.test(f.type || '') ? '🖼️' : '📄'} ${esc(f.name)}</span><button type="button" class="ghost" data-rm="${i}">빼기</button></li>`).join('')}</ul>` : '<p class="note">첨부된 파일이 없습니다.</p>';
+  drawFiles();
+  $('#files').onclick = e => { const b = e.target.closest('[data-rm]'); if (!b) return; removed.push(...d.files.splice(+b.dataset.rm, 1)); drawFiles(); };
+  $('#fin').onchange = async e => {
+    for (const f of e.target.files) {
+      if (f.size > 20 * 1024 * 1024) { toast(f.name + ': 20MB가 넘습니다.'); continue; }
+      const ext = (f.name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const path = `${SITE}/${uid()}.${ext}`;
+      toast(f.name + ' 올리는 중…');
+      const { error } = await sb.storage.from(DOCS_BUCKET).upload(path, f, { contentType: f.type || 'application/octet-stream', upsert: false });
+      if (error) { toast(f.name + ' 올리지 못했습니다: ' + error.message); continue; }
+      d.files.push({ path, name: f.name, type: f.type || '', at: new Date().toISOString() }); drawFiles();
+    }
+    e.target.value = ''; toast('파일을 올렸습니다. 저장을 눌러 주세요.');
+  };
+  $('#save').onclick = async () => {
+    const v = readForm($('#basic'), F); if (!v.title) return toast('서류명을 입력하세요.');
+    const body = { ...v, files: d.files, updated_at: new Date().toISOString() };
+    let target;
+    if (d0) { await q(sb.from('ow_docs').update(body).eq('id', d0.id)); target = d0.id; }
+    else { target = (await q(sb.from('ow_docs').insert({ ...body, site_id: SITE }).select('id').single())).id; }
+    if (removed.length && isAdmin()) await sb.storage.from(DOCS_BUCKET).remove(removed.map(f => f.path));
+    toast('저장했습니다.'); location.hash = '#doc/' + target;
   };
 };
 
