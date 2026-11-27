@@ -787,7 +787,7 @@ const DTEMPLATE = [
   ['소방 계획', '소방계획서', '1년 (변경 시 수정)', 'fire_plan'], ['소방 계획', '자위소방대 편성표', '변경 시'], ['소방 계획', '소방훈련·교육 실시 기록', '연 1회 이상'],
   ['석면 관리', '건축물 석면조사 결과서', '보관 (재조사·공사 시 갱신)'], ['석면 관리', '건축물 석면지도', '변경 시 수정·비치'], ['석면 관리', '석면건축물안전관리인 지정·신고', '변경 시 10일 이내 변경신고'],
   ['석면 관리', '석면건축물안전관리인 교육', '신고 후 1년 이내 이수'], ['석면 관리', '석면건축물 손상상태 조사', '6개월마다', 'asb_check'], ['석면 관리', '실내공기 중 석면농도 측정', '2년마다 (측정기관)'], ['석면 관리', '석면 해체·제거 작업 기록', '작업 시'],
-  ['공사·보수', '공사 완료 보고서', '공사 끝날 때마다', 'work_done'],
+  ['공사·보수', '공사·보수 계획서', '공사 전마다', 'work_plan'], ['공사·보수', '공사 완료 보고서', '공사 끝날 때마다', 'work_done'],
   ['인허가·보험', '건축물대장', ''], ['인허가·보험', '화재보험(다중이용시설 등)', '1년'], ['인허가·보험', '영업·시설 신고증', '']
 ];
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return ymd(x); };
@@ -927,6 +927,21 @@ const FORMS = {
     reportTitle: '조치 및 관리대장 기록', report: [['fix', '조치 내용 (보수·밀봉·구역 폐쇄 등)'], ['fixdate', '조치일'], ['ledger', '석면건축물 관리대장(정보망) 기록일']],
     guide: '석면건축물 소유자는 6개월마다 손상 상태와 비산 가능성을 조사하고, 위해성에 따라 보수·밀봉·구역 폐쇄 등 필요한 조치를 한 뒤 석면건축물 관리대장(석면관리 정보망)에 지체 없이 기록해야 합니다. 손상 부위는 직접 만지거나 제거하지 말고 사진을 첨부하세요.'
   },
+  work_plan: {
+    name: '공사·보수 계획서', law: '수양관 시설 공사·보수 사전 계획', months: 0, cycle: '공사 전마다', approve: 1,
+    performer: '작성자 (공사 담당)', dateLabel: '작성일', results: ['완료', '미완료', '해당없음'],
+    header: [['title', '공사명', 'wide'], ['kind', '구분 (공사·보수·교체·수리)'], ['place', '위치'], ['why', '필요성·목적', 'wide'],
+      ['start', '예정 시작일'], ['end', '예정 완료일'], ['budget', '예상 금액 (원)'], ['account', '예산 항목'], ['how', '시공 방법 (직영·업체)'], ['vendor', '업체 (후보)']],
+    items: [
+      ['현장', '현장 조사, 공사 전 사진 촬영'], ['견적', '견적 2곳 이상 비교'], ['예산', '예산 확보 확인'],
+      ['일정', '수련회·행사 일정 피해서 일정 잡기'], ['공지', '사용 중지 구역·기간 안내'], ['안전', '작업 안전대책 (고소·화기·전기 작업 등)'],
+      ['소방', '소방시설 차단·영향 여부 확인'], ['석면', '석면 자재 포함 여부 확인 (해체·제거 신고 필요 여부)'],
+      ['인허가', '인허가·신고 필요 여부 확인'], ['폐기물', '폐기물 처리 계획']
+    ],
+    reportTitle: '공사 범위와 세부 내용', report: [['scope', '공사 범위·물량'], ['material', '주요 자재'], ['risk', '예상 문제와 대책']],
+    noteLabel: '세부 계획 및 특이사항', toDone: 1,
+    guide: '결재가 끝나면 공사를 진행하고, 공사가 끝나면 이 계획서 화면의 "공사 완료 보고서 만들기"로 완료 보고서를 작성하세요. 견적서·현장 사진은 원본 첨부에 올려 두세요.'
+  },
   work_done: {
     name: '공사 완료 보고서', law: '수양관 시설 공사 준공 확인', months: 0, cycle: '공사 끝날 때마다', approve: 1,
     performer: '보고자 (공사 감독)', dateLabel: '보고일', results: ['적합', '부적합', '보완중', '해당없음'],
@@ -943,7 +958,7 @@ const FORMS = {
   }
 };
 const addMonths = (d, n) => { const x = new Date(d); x.setMonth(x.getMonth() + n); return ymd(x); };
-const GOOD = ['양호', '적합', '조치완료', '해당없음'];
+const GOOD = ['양호', '적합', '완료', '조치완료', '해당없음'];
 const resPill = r => r ? `<span class="pill ${r === '해당없음' ? '' : GOOD.includes(r) ? 'ok' : 'bad'}">${esc(r)}</span>` : '';
 /* ---------- 소방계획서 (작성·수정·인쇄) ---------- */
 const PLAN_SECTIONS = [
@@ -1026,7 +1041,7 @@ routes.docrec = async id => {
   }
   const h = r.header || {}, res = r.results || {}, rp = r.report || {};
   const bad = fm.items.filter((_, i) => res[i]?.r && !GOOD.includes(res[i].r)).length;
-  M().innerHTML = `<div class="head noprint"><a class="btn ghost" href="#doc/${r.doc_id}">← ${esc(d.title)}</a><div class="ctrls">${isAdmin() ? '<button class="ghost danger" id="del">삭제</button>' : ''}<a class="btn" href="#docrec-edit/${r.id}">수정</a><button class="pri" onclick="print()">인쇄</button></div></div>
+  M().innerHTML = `<div class="head noprint"><a class="btn ghost" href="#doc/${r.doc_id}">← ${esc(d.title)}</a><div class="ctrls">${isAdmin() ? '<button class="ghost danger" id="del">삭제</button>' : ''}<a class="btn" href="#docrec-edit/${r.id}">수정</a>${fm.toDone ? '<button class="btn" id="toDone">공사 완료 보고서 만들기</button>' : ''}<button class="pri" onclick="print()">인쇄</button></div></div>
   <div class="doc">
     <p class="note" style="margin:0">${esc(fm.law)}</p>
     <div class="doctop"><h2>${esc(fm.name)}</h2>${bad ? `<span class="pill bad">확인 필요 ${bad}건</span>` : `<span class="pill ok">모두 ${esc(fm.results[0])}</span>`}</div>
@@ -1041,8 +1056,14 @@ routes.docrec = async id => {
   </div>`;
   M().querySelectorAll('[data-open]').forEach(b => b.onclick = async () => { const w = window.open('', '_blank'); try { const u = await docUrl(r.files[+b.dataset.open].path); if (w) w.location = u; else location.href = u; } catch (e) { w && w.close(); toast('파일을 열지 못했습니다: ' + e.message); } });
   if (fm.approve) bindApprove('ow_doc_records', r, () => route());
+  const td = $('#toDone'); if (td) td.onclick = async () => {
+    let w = (await q(sb.from('ow_docs').select('id').eq('site_id', d.site_id || r.site_id).eq('form', 'work_done').limit(1)))[0];
+    if (!w) w = await q(sb.from('ow_docs').insert({ site_id: r.site_id, category: '공사·보수', title: '공사 완료 보고서', cycle: '공사 끝날 때마다', form: 'work_done' }).select('id').single());
+    PREFILL = { title: h.title, place: h.place, vendor: h.vendor, contract: h.budget, start: h.start, end: h.end };
+    location.hash = '#docrec-edit/new-' + w.id; };
   const del = $('#del'); if (del) del.onclick = () => confirmBox(`${r.date} 기록을 삭제할까요?`, '삭제', async () => { await q(sb.from('ow_doc_records').delete().eq('id', r.id)); toast('삭제했습니다.'); location.hash = '#doc/' + r.doc_id; });
 };
+let PREFILL = null;
 routes['docrec-edit'] = async arg => {
   let r = null, docId;
   if (arg && arg.startsWith('new-')) docId = arg.slice(4);
@@ -1055,7 +1076,7 @@ routes['docrec-edit'] = async arg => {
   }
   let prev = null;
   if (!r) prev = (await q(sb.from('ow_doc_records').select('header,report').eq('doc_id', docId).order('date', { ascending: false }).limit(1)))[0];
-  const h = r?.header || prev?.header || {}, res = structuredClone(r?.results || {}), rp = r?.report || {}, files = structuredClone(r?.files || []);
+  const h = r?.header || (PREFILL ? { ...PREFILL } : prev?.header) || {}; PREFILL = null; const res = structuredClone(r?.results || {}), rp = r?.report || {}, files = structuredClone(r?.files || []);
   M().innerHTML = `<div class="head"><h2>${esc(fm.name)} ${r ? '수정' : '작성'}</h2><div class="ctrls"><a class="btn ghost" href="${r ? '#docrec/' + r.id : '#doc/' + docId}">취소</a><button class="pri" id="save">저장</button></div></div>
   <div class="form" id="hd">${fieldHTML({ k: 'date', label: fm.dateLabel, type: 'date', req: 1 }, r?.date || today())}${fieldHTML({ k: 'performer', label: fm.performer, list: 'staffList', req: 1 }, r?.performer || d.holder || myName())}
   ${fm.header.map(([k, l, w]) => fieldHTML({ k: 'h_' + k, label: l, wide: w ? 1 : 0 }, h[k])).join('')}</div>
