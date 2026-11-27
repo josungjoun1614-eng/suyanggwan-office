@@ -231,17 +231,36 @@ async function route() {
 addEventListener('hashchange', route);
 
 /* ================= 홈 ================= */
+/* ---------- 나스 백업 보고 ---------- */
+function backupSummary(runs) {
+  const days = {};
+  (runs || []).forEach(r => { const d = lt(r.at).slice(0, 10); const x = days[d] ||= { day: d, at: r.at, bytes: null, files: null, fail: [] }; if (r.at > x.at) x.at = r.at; if (r.status !== '성공') x.fail.push(r.note || r.part); else if (r.part === 'data') x.bytes = r.bytes; else if (r.part === 'files') x.files = r.files; });
+  const list = Object.values(days).sort((a, b) => b.day.localeCompare(a.day));
+  const last = list[0] || null;
+  const hours = last ? (Date.now() - new Date(last.at)) / 36e5 : null;
+  const state = !last ? 'none' : last.fail.length || last.bytes === null || last.files === null ? 'bad' : hours > 26 ? 'late' : 'ok';
+  return { list, last, state, hours };
+}
+const kb = n => n === null || n === undefined ? '-' : n >= 1048576 ? (n / 1048576).toFixed(1) + 'MB' : Math.max(1, Math.round(n / 1024)) + 'KB';
+function backupPanel(bk) {
+  if (bk.state === 'none') return '<p class="note">아직 백업 기록이 없습니다.</p>';
+  const l = bk.last;
+  const pill = { ok: '<span class="pill ok">정상</span>', late: `<span class="pill bad">${Math.floor(bk.hours)}시간째 백업 없음</span>`, bad: '<span class="pill bad">확인 필요</span>' }[bk.state];
+  return `<ul class="list"><li><span>최근 백업 <b>${esc(lt(l.at))}</b></span>${pill}</li><li><span>전체 자료 ${kb(l.bytes)} · 첨부 파일 ${l.files ?? '-'}개</span></li>${l.fail.length ? `<li class="note">오류: ${esc(l.fail.join(', '))}</li>` : ''}<li class="note">매일 02:00 · 저장 위치 sungrak_sg /수양관사무자동화/백업</li></ul>`;
+}
 routes.home = async () => {
   const [a, b] = mRange(MONTH);
-  const [logs, exps, meals, tasks, inv, crs, docsSoon] = await Promise.all([
+  const [logs, exps, meals, tasks, inv, crs, docsSoon, bruns] = await Promise.all([
     q(sb.from('ow_logs').select('id,date,tasks,approvals,place').eq('site_id', SITE).gte('date', a).lt('date', b).order('date', { ascending: false })),
     q(sb.from('ow_expenses').select('id,date,title,total,approvals').eq('site_id', SITE).gte('date', a).lt('date', b).order('date', { ascending: false })),
     q(sb.from('ow_meals').select('count').eq('site_id', SITE).gte('date', a).lt('date', b)),
     q(sb.from('ow_tasks').select('*').eq('site_id', SITE).neq('status', '완료').order('due', { ascending: true, nullsFirst: false }).limit(50)),
     q(sb.from('ow_inventory').select('id,name,qty,min_qty,unit').eq('site_id', SITE)),
     q(sb.from('ow_change_requests').select('id').eq('site_id', SITE).eq('status', '대기')),
-    q(sb.from('ow_docs').select('id,category,title,holder,expires').eq('site_id', SITE).not('expires', 'is', null).lte('expires', addDays(today(), 60)).order('expires'))
+    q(sb.from('ow_docs').select('id,category,title,holder,expires').eq('site_id', SITE).not('expires', 'is', null).lte('expires', addDays(today(), 60)).order('expires')),
+    isAdmin() ? q(sb.from('ow_backup_runs').select('*').order('at', { ascending: false }).limit(40)) : Promise.resolve([])
   ]);
+  const bk = backupSummary(bruns);
   const soon = docsSoon;
   const low = inv.filter(i => Number(i.qty) <= Number(i.min_qty) && Number(i.min_qty) > 0);
   const mealN = meals.reduce((s, m) => s + m.count, 0);
@@ -262,6 +281,7 @@ routes.home = async () => {
     <div class="panel"><h3>최근 작업 일지 <a href="#logs">전체 보기</a></h3><ul class="list">${logs.slice(0, 6).map(l => { const t = (l.tasks || []).find(x => x.text) || {}; return `<li><a href="#log/${l.id}">${esc(md(l.date))} ${esc(t.text || '(내용 없음)')}</a>${(l.approvals || {})[lastRole()] ? '<span class="pill ok">결재 완료</span>' : '<span class="pill">결재 대기</span>'}</li>`; }).join('') || '<li class="note">이번 달 일지가 없습니다.</li>'}</ul></div>
     <div class="panel"><h3>할 일 <a href="#tasks">전체 보기</a></h3><ul class="list">${tasks.slice(0, 6).map(t => `<li><span>${esc(t.title)}${t.assignee ? ` <span class="note">· ${esc(t.assignee)}</span>` : ''}</span><span class="due ${t.due && t.due < t0 ? 'over' : ''}">${t.due ? esc(md(t.due)) : ''}</span></li>`).join('') || '<li class="note">남은 할 일이 없습니다.</li>'}</ul></div>
     <div class="panel"><h3>지출결의서 <a href="#expenses">전체 보기</a></h3><ul class="list">${exps.slice(0, 6).map(e => `<li><a href="#exp/${e.id}">${esc(md(e.date))} ${esc(e.title)}</a><span class="num">${won(e.total)}원</span></li>`).join('') || '<li class="note">이번 달 지출결의서가 없습니다.</li>'}</ul></div>
+    ${isAdmin() ? `<div class="panel"><h3>나스(NAS) 백업 <a href="#settings">기록 보기</a></h3>${backupPanel(bk)}</div>` : ''}
     <div class="panel"><h3>건물 관리 서류 만료 <a href="#docs">전체 보기</a></h3><ul class="list">${soon.slice(0, 6).map(d => `<li><a href="#doc/${d.id}">${esc(d.title)}${d.holder ? ` <span class="note">· ${esc(d.holder)}</span>` : ''}</a>${ddayPill(d.expires)}</li>`).join('') || '<li class="note">60일 안에 만료되는 서류가 없습니다.</li>'}</ul></div>
     <div class="panel"><h3>재고 부족 <a href="#inventory">재고 보기</a></h3><ul class="list">${low.map(i => `<li><span>${esc(i.name)}</span><span class="danger">${esc(i.qty)} / 최소 ${esc(i.min_qty)} ${esc(i.unit || '')}</span></li>`).join('') || '<li class="note">부족한 품목이 없습니다.</li>'}</ul></div>
   </div>`;
@@ -1077,6 +1097,7 @@ routes.settings = async () => {
     <button id="sAp">저장</button></section>
   <section class="sec"><h3>식수표</h3><div class="form"><label class="f wide">식사 인원 (한 줄에 한 명)<textarea id="mp">${esc(lines(S.meal?.people))}</textarea></label><label class="f">1식 단가(원)<input id="mprice" type="number" inputmode="numeric" value="${esc(S.meal?.price)}"></label><label class="f">식당(거래처)<input id="mplace" value="${esc(S.meal?.place)}"></label></div><button id="sMeal" style="margin-top:10px">저장</button></section>
   <section class="sec"><h3>시설 점검 항목 <span class="note">(한 줄에 "구분 | 항목")</span></h3><textarea id="ci" style="min-height:200px">${esc((S.check_items || []).map(x => x.area + ' | ' + x.item).join('\n'))}</textarea><button id="sCi" style="margin-top:10px">저장</button></section>
+  ${admin ? `<section class="sec"><h3>나스(NAS) 백업 기록 <span class="note">매일 02:00 · sungrak_sg /수양관사무자동화/백업</span></h3><div id="bkSec"><p class="note">불러오는 중…</p></div></section>` : ''}
   <section class="sec"><h3>결재 방식</h3><p class="note">결재는 로그인한 본인 이름으로만 찍힙니다. 결재자를 지정한 칸은 지정된 사람만, 지정하지 않은 칸은 관리자만 결재할 수 있습니다. 결재자 이름은 팀원 계정의 이름과 같아야 합니다.</p></section>`;
   if (!admin) { M().querySelectorAll('section.sec input, section.sec textarea, section.sec button').forEach(el => el.disabled = true); return; }
   const done = () => toast('저장했습니다.');
@@ -1084,6 +1105,10 @@ routes.settings = async () => {
   const SITE_OPTS = ['본부 (6곳 모두)', ...SITES.map(x => x.name)];
   const siteFromLabel = l => l.startsWith('본부') ? null : (SITES.find(x => x.name === l) || {}).id;
   const addStaff = async name => { if (name && !(S.staff || []).includes(name)) await saveSetting('staff', [...(S.staff || []), name]); };
+  if ($('#bkSec')) q(sb.from('ow_backup_runs').select('*').order('at', { ascending: false }).limit(200)).then(runs => {
+    const bk = backupSummary(runs);
+    $('#bkSec').innerHTML = backupPanel(bk) + (bk.list.length ? `<div class="scroll" style="margin-top:8px"><table class="stack"><thead><tr><th>날짜</th><th>시각</th><th class="r">전체 자료</th><th class="r">첨부 파일</th><th>결과</th></tr></thead><tbody>${bk.list.slice(0, 30).map(d => `<tr><td>${esc(d.day)}</td><td>${esc(lt(d.at).slice(11, 16))}</td><td class="r">${kb(d.bytes)}</td><td class="r">${d.files ?? '-'}</td><td>${d.fail.length ? `<span class="pill bad">오류</span> <small>${esc(d.fail.join(', '))}</small>` : d.bytes !== null && d.files !== null ? '<span class="pill ok">성공</span>' : '<span class="pill">일부</span>'}</td></tr>`).join('')}</tbody></table></div>` : '');
+  });
   $('#accAdd').onclick = () => formModal('팀원 계정 만들기', [
     { k: 'name', label: '이름', req: 1 }, { k: 'login_id', label: '아이디 (영문 소문자·숫자, 3~20자)', req: 1 },
     { k: 'password', label: '처음 비밀번호 (6자 이상)', req: 1 }, { k: 'role', label: '권한', type: 'select', options: ROLE_OPTS, def: '직원' },
