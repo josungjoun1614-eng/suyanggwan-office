@@ -453,10 +453,21 @@ routes.expenses = async () => {
   M().querySelectorAll('[data-ek]').forEach(b => b.onclick = () => { EXPK = b.dataset.ek; route(); });
   bindMonth();
 };
+/* 물품 구입 요청서 → 계획서 → 지출결의서 연결 */
+const chainStep = (label, x, href) => x ? `<a class="chain-s" href="${href}"><small>${label}</small><b>${esc(x.title || '')}</b><span>${esc(x.date || '')} · ${planDone(x) ? '<span class="pill ok">결재 완료</span>' : '<span class="pill acc">결재 중</span>'}</span></a>` : `<span class="chain-s off"><small>${label}</small><b>없음</b></span>`;
+async function purchaseChain({ req, plan, exp }) {
+  if (exp && !plan && !req) { const ls = await q(sb.from('ow_plans').select('*').eq('expense_id', exp.id)); plan = ls.find(x => x.kind !== '요청서'); req = ls.find(x => x.kind === '요청서'); }
+  if (plan && !req) req = (await q(sb.from('ow_plans').select('*').eq('plan_id', plan.id).limit(1)))[0];
+  if (req && !plan && req.plan_id) plan = await q(sb.from('ow_plans').select('*').eq('id', req.plan_id).maybeSingle());
+  const eid = exp?.id || plan?.expense_id || req?.expense_id;
+  if (!exp && eid) exp = await q(sb.from('ow_expenses').select('id,title,date,approvals,stock_applied_at').eq('id', eid).maybeSingle());
+  if (!req && !plan && !exp) return '';
+  return `<section class="sec noprint"><h3>연결 서류</h3><div class="chain">${chainStep('① 구입 요청서', req, req && '#plan/' + req.id)}<i>→</i>${chainStep('② 구입 계획서', plan, plan && '#plan/' + plan.id)}<i>→</i>${chainStep('③ 지출결의서', exp, exp && '#exp/' + exp.id)}${exp?.stock_applied_at ? '<i>→</i><a class="chain-s" href="#inventory"><small>④ 재고</small><b>입고 완료</b></a>' : ''}</div></section>`;
+}
 routes.exp = async id => {
   const e = await q(sb.from('ow_expenses').select('*').eq('id', id).maybeSingle());
   if (!e) { M().innerHTML = '<div class="empty">결의서를 찾을 수 없습니다.</div>'; return; }
-  const render = () => {
+  let render = () => {
     M().innerHTML = `<div class="head noprint"><a class="btn ghost" href="#expenses">← 목록</a><div class="ctrls"><button class="ghost danger" id="del">삭제 요청</button><a class="btn" href="#exp-edit/${e.id}">수정 요청</a><button class="pri" onclick="print()">인쇄</button></div></div>
     <div class="doc">
       <div class="doctop"><h2>지출결의서${e.kind && e.kind !== '식대' ? ` <small>(${esc(e.kind)})</small>` : ''}</h2>${approveHTML(e.approvals)}</div>
@@ -482,6 +493,8 @@ routes.exp = async id => {
     if (banner) M().querySelector('.doc').insertAdjacentHTML('beforebegin', banner);
   };
   const banner = await pendingBanner('ow_expenses', e.id);
+  const chain = e.kind === '물품구입' ? await purchaseChain({ exp: e }) : '';
+  const render0 = render; render = () => { render0(); if (chain) M().querySelector('.doc').insertAdjacentHTML('afterend', chain); };
   render();
 };
 routes['exp-edit'] = async id => {
@@ -492,6 +505,7 @@ routes['exp-edit'] = async id => {
   d.kind = d.kind || '식대';
   const F = [{ k: 'kind', label: '구분', type: 'select', options: EKINDS }, { k: 'title', label: '제목', req: 1, wide: 1 }, { k: 'date', label: '지출일', type: 'date', req: 1 }, { k: 'dept', label: '부서' }, { k: 'author', label: '작성자', list: 'staffList', req: 1 }, { k: 'vendor', label: '거래처' }, { k: 'pay_method', label: '결제 방법', type: 'select', options: PAY }];
   M().innerHTML = `<div class="head"><h2>${e ? '결의서 수정 요청' : d.kind === '식대' ? '새 지출결의서' : `새 ${d.kind} 결의서`}</h2><div class="ctrls"><a class="btn ghost" href="${e ? '#exp/' + e.id : '#expenses'}">취소</a><button class="pri" id="save">저장</button></div></div>
+  ${!e && d.kind === '물품구입' ? '<section class="sec" id="fromPlan"></section>' : ''}
   <section class="sec"><h3>기본 정보</h3><div class="form" id="basic">${F.map(f => fieldHTML(f, d[f.k])).join('')}</div></section>
   <section class="sec"><h3>지출 내역 <span class="note" id="tot"></span></h3>
     <div class="ctrls" id="mealCtl" style="margin-bottom:12px"><input type="month" id="mm" value="${esc((d.date || today()).slice(0, 7))}" aria-label="식수표 월"><select id="mmode" aria-label="불러오기 방식"><option value="sum">전체 합산 (한 줄)</option><option value="each">1인별 (사람마다 한 줄)</option></select><button type="button" id="fromMeal">식수표에서 수량 불러오기</button><span class="note">고른 달 식수표의 식수를 수량으로, 설정의 1식 단가를 단가로 넣습니다.</span></div>
@@ -499,6 +513,14 @@ routes['exp-edit'] = async id => {
   <section class="sec"><h3>비고</h3><textarea id="note">${esc(d.note)}</textarea></section>
   ${e ? `<section class="sec"><h3>수정 사유 <span class="note">(결재자에게 보이고, 승인되면 수정 이력에 남습니다)</span></h3><input id="reason" placeholder="예: 식수표 기준으로 재계산"></section>` : ''}
   <section class="sec"><h3>증빙 (영수증 사진)</h3><div id="rc"></div></section>`;
+  if ($('#fromPlan')) {
+    const cand = (await q(sb.from('ow_plans').select('*').eq('site_id', SITE).is('expense_id', null).is('plan_id', null).order('date', { ascending: false }).limit(50))).filter(planDone);
+    $('#fromPlan').innerHTML = `<h3>구입 요청서·계획서에서 불러오기 <span class="note">결재가 끝난 서류 ${cand.length}건</span></h3>${cand.length ? `<ul class="list">${cand.map(x => `<li><span><span class="pill ${x.kind === '요청서' ? 'acc' : 'ok'}">${esc(x.kind || '계획서')}</span> ${esc(x.date)} · <b>${esc(x.title)}</b> · ${won(x.total)}원${x.urgency === '긴급' ? ' <span class="pill bad">긴급</span>' : ''}</span><button type="button" class="pri" data-fp="${x.id}">이 서류로 결의서 만들기</button></li>`).join('')}</ul>` : '<p class="note">결재가 끝났고 아직 결의서를 만들지 않은 요청서·계획서가 없습니다. 아래에 직접 입력하세요.</p>'}`;
+    $('#fromPlan').onclick = ev => { const b = ev.target.closest('[data-fp]'); if (!b) return; const x = cand.find(c => c.id === b.dataset.fp);
+      confirmBox(`'${x.title}' ${x.kind || '계획서'}의 품목으로 물품구입 결의서를 만들까요? 만든 뒤 실제 구입 내역에 맞게 고칠 수 있습니다.`, '만들기', async () => {
+        const { data, error } = await sb.rpc('ow_plan_to_expense', { plan: x.id }); if (error) return toast(error.message);
+        toast('결의서를 만들었습니다. 연결 서류에서 요청서·계획서를 볼 수 있습니다.'); location.hash = '#exp/' + data; }); };
+  }
   const tot = () => $('#tot').textContent = '합계 ' + won(expTotal(d.items)) + '원';
   const calcR = r => '금액 ' + won((Number(r.qty) || 0) * (Number(r.price) || 0)) + '원';
   let ed;
@@ -688,10 +710,12 @@ routes.plan = async id => {
     const tp = $('#toPlan'); if (tp) tp.onclick = () => confirmBox('이 요청서 내용으로 물품 구입 계획서를 만들까요? 만든 계획서는 다시 결재를 받습니다.', '만들기', async () => {
       const { data, error } = await sb.rpc('ow_request_to_plan', { req: p.id }); if (error) return toast(error.message);
       toast('물품 구입 계획서를 만들었습니다.'); PKIND = '계획서'; location.hash = '#plan/' + data; });
+    if (chain) M().querySelector('.doc').insertAdjacentHTML('afterend', chain);
     const te = $('#toExp'); if (te) te.onclick = () => confirmBox(`이 ${K} 내용으로 물품구입 지출결의서를 만들까요? 만든 뒤 실제 구입 내역에 맞게 고칠 수 있습니다.`, '만들기', async () => {
       const { data, error } = await sb.rpc('ow_plan_to_expense', { plan: p.id }); if (error) return toast(error.message);
       toast('물품구입 지출결의서를 만들었습니다.'); location.hash = '#exp/' + data; });
   };
+  const chain = await purchaseChain(p.kind === '요청서' ? { req: p } : { plan: p });
   render();
 };
 routes['plan-edit'] = async id => {

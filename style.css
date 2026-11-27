@@ -206,3 +206,9 @@ body.out nav,body.out .who{display:none}
   a{text-decoration:none}
 }
 @media(prefers-reduced-motion:no-preference){.modal .box{animation:up .16s ease-out}@keyframes up{from{opacity:0;transform:translateY(8px)}}}
+.chain{display:flex;flex-wrap:wrap;align-items:stretch;gap:8px}
+.chain>i{align-self:center;font-style:normal;color:var(--mut,#888)}
+.chain-s{display:flex;flex-direction:column;gap:2px;min-width:150px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;text-decoration:none;color:inherit}
+.chain-s small{color:var(--mut,#888)}
+.chain-s.off{opacity:.5;border-style:dashed}
+a.chain-s:hover{border-color:var(--acc)}
