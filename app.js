@@ -214,7 +214,7 @@ const pending = rows => rows.filter(r => !(r.approvals || {})[lastRole()]).lengt
 const stampsHTML = ap => `<div class="stamps">${S.roles.map(r => `<i class="${(ap || {})[r] ? 'on' : ''}">${esc(r)}</i>`).join('')}</div>`;
 
 /* ---------- 라우터 ---------- */
-const NAV = { leave: 'leaves', 'leave-edit': 'leaves', log: 'logs', 'log-edit': 'logs', exp: 'expenses', 'exp-edit': 'expenses', check: 'checks', 'check-edit': 'checks' };
+const NAV = { plan: 'plans', 'plan-edit': 'plans', leave: 'leaves', 'leave-edit': 'leaves', log: 'logs', 'log-edit': 'logs', exp: 'expenses', 'exp-edit': 'expenses', check: 'checks', 'check-edit': 'checks' };
 const routes = {};
 async function route() {
   if (!ME) return;
@@ -622,6 +622,69 @@ routes.meals = async () => {
       }); });
   };
   draw();
+};
+
+/* ================= 물품 구입 계획서 ================= */
+const planDone = p => S.roles.every(r => (p.approvals || {})[r]);
+routes.plans = async () => {
+  const [a, b] = mRange(MONTH);
+  const rows = await q(sb.from('ow_plans').select('*').eq('site_id', SITE).gte('date', a).lt('date', b).order('date', { ascending: false }));
+  M().innerHTML = `<div class="head"><h2>물품 구입 계획서</h2><div class="ctrls">${monthPick()}<a class="btn pri" href="#plan-edit/new">+ 계획서 작성</a></div></div>
+  <div class="kpis"><div class="hot"><b class="num">${won(rows.reduce((s, p) => s + Number(p.total), 0))}</b><span>${mLabel(MONTH)} 계획 금액(원)</span></div><div><b class="num">${rows.length}</b><span>계획서</span></div><div><b class="num">${rows.filter(p => !planDone(p)).length}</b><span>결재 대기</span></div><div><b class="num">${rows.filter(p => p.expense_id).length}</b><span>결의서 작성됨</span></div></div>
+  ${rows.length ? `<div class="scroll"><table class="stack"><thead><tr><th>작성일</th><th>제목</th><th>희망 구입일</th><th class="r">예정 금액(원)</th><th>결재</th><th>결의서</th></tr></thead><tbody>${rows.map(p => `<tr><td>${esc(p.date)}</td><td><a href="#plan/${p.id}"><b>${esc(p.title)}</b></a></td><td>${esc(p.needed_by || '')}</td><td class="r num">${won(p.total)}</td><td>${stampsHTML(p.approvals)}</td><td>${p.expense_id ? `<a href="#exp/${p.expense_id}">보기</a>` : planDone(p) ? '<span class="pill acc">작성 가능</span>' : ''}</td></tr>`).join('')}</tbody></table></div>` : `<div class="empty">${mLabel(MONTH)} 물품 구입 계획서가 없습니다.</div>`}
+  <p class="note">계획서 결재가 끝나면 <b>지출결의서(물품구입)</b>로 바로 옮길 수 있고, 그 결의서 결재가 끝나면 재고에 자동 입고됩니다.</p>`;
+  bindMonth();
+};
+routes.plan = async id => {
+  const p = await q(sb.from('ow_plans').select('*').eq('id', id).maybeSingle());
+  if (!p) { M().innerHTML = '<div class="empty">계획서를 찾을 수 없습니다.</div>'; return; }
+  const render = () => {
+    const locked = Object.keys(p.approvals || {}).length > 0, done = planDone(p);
+    M().innerHTML = `<div class="head noprint"><a class="btn ghost" href="#plans">← 목록</a><div class="ctrls">${locked && !isAdmin() ? '' : `<button class="ghost danger" id="del">삭제</button><a class="btn" href="#plan-edit/${p.id}">수정</a>`}${p.expense_id ? `<a class="btn" href="#exp/${p.expense_id}">결의서 보기</a>` : done ? '<button id="toExp">지출결의서로 만들기</button>' : ''}<button class="pri" onclick="print()">인쇄</button></div></div>
+    ${locked && !done && !isAdmin() ? '<p class="note noprint">결재가 진행 중이라 수정·삭제하려면 결재를 먼저 취소하세요.</p>' : ''}
+    <div class="doc">
+      <div class="doctop"><h2>물품 구입 계획서</h2>${approveHTML(p.approvals)}</div>
+      <div class="kv">${[['부서', p.dept || siteName(p.site_id)], ['작성자', p.author], ['작성일', p.date], ['희망 구입일', p.needed_by], ['구입처(예정)', p.vendor]].map(([k, v]) => `<div><span>${k}</span>${esc(v || '')}</div>`).join('')}</div>
+      <div class="amount">예정 금액 금 ${korMoney(p.total)}원정 <small>(₩${won(p.total)})</small></div>
+      <p><b>제목</b> ${esc(p.title)}</p>
+      ${p.purpose ? `<section class="sec"><h3>구입 목적</h3><p class="pre">${esc(p.purpose)}</p></section>` : ''}
+      <div class="scroll"><table class="stack"><thead><tr><th>분류</th><th>품명</th><th>규격</th><th class="r">수량</th><th class="r">단가</th><th class="r">금액</th><th>비고</th></tr></thead>
+      <tbody>${(p.items || []).map(i => `<tr><td>${esc(i.cat || '')}</td><td>${esc(i.desc)}</td><td>${esc(i.spec || '')}</td><td class="r">${esc(i.qty)}${i.unit ? ' ' + esc(i.unit) : ''}</td><td class="r">${won(i.price)}</td><td class="r">${won((Number(i.qty) || 0) * (Number(i.price) || 0))}</td><td>${esc(i.note || '')}</td></tr>`).join('') || '<tr><td colspan="7">품목 없음</td></tr>'}</tbody>
+      <tfoot><tr><td>합계</td><td></td><td></td><td></td><td></td><td class="r">${won(p.total)}</td><td></td></tr></tfoot></table></div>
+      ${p.note ? `<section class="sec"><h3>비고</h3><p class="pre">${esc(p.note)}</p></section>` : ''}
+      <p style="margin-top:18px">위와 같이 물품을 구입하고자 하오니 결재하여 주시기 바랍니다.</p>
+    </div>`;
+    bindApprove('ow_plans', p, render);
+    const del = $('#del'); if (del) del.onclick = () => confirmBox(`'${p.title}' 계획서를 삭제할까요?`, '삭제', async () => { await q(sb.from('ow_plans').delete().eq('id', p.id)); toast('삭제했습니다.'); location.hash = '#plans'; });
+    const te = $('#toExp'); if (te) te.onclick = () => confirmBox('이 계획서 내용으로 물품구입 지출결의서를 만들까요? 만든 뒤 실제 구입 내역에 맞게 고칠 수 있습니다.', '만들기', async () => {
+      const { data, error } = await sb.rpc('ow_plan_to_expense', { plan: p.id }); if (error) return toast(error.message);
+      toast('물품구입 지출결의서를 만들었습니다.'); location.hash = '#exp/' + data; });
+  };
+  render();
+};
+routes['plan-edit'] = async id => {
+  let p = null;
+  if (id && id !== 'new') { p = await q(sb.from('ow_plans').select('*').eq('id', id).maybeSingle()); if (!p) { M().innerHTML = '<div class="empty">계획서를 찾을 수 없습니다.</div>'; return; } }
+  const d = p ? structuredClone(p) : { date: today(), title: '', author: myName(), dept: S.org?.name || siteName(SITE), purpose: '', needed_by: '', vendor: '', items: [], note: '' };
+  const blank = () => ({ cat: GOODS[0], desc: '', spec: '', unit: '개', qty: 1, price: '', note: '' });
+  if (!d.items.length) d.items.push(blank());
+  const F = [{ k: 'title', label: '제목', req: 1, wide: 1 }, { k: 'date', label: '작성일', type: 'date', req: 1 }, { k: 'needed_by', label: '희망 구입일', type: 'date' }, { k: 'dept', label: '부서' }, { k: 'author', label: '작성자', list: 'staffList', req: 1 }, { k: 'vendor', label: '구입처(예정)' }, { k: 'purpose', label: '구입 목적', type: 'textarea', wide: 1 }];
+  M().innerHTML = `<div class="head"><h2>${p ? '계획서 수정' : '물품 구입 계획서 작성'}</h2><div class="ctrls"><a class="btn ghost" href="${p ? '#plan/' + p.id : '#plans'}">취소</a><button class="pri" id="save">저장</button></div></div>
+  <div class="form" id="basic">${F.map(f => fieldHTML(f, d[f.k])).join('')}</div>
+  <section class="sec"><h3>구입 품목 <span class="note" id="tot"></span></h3><div id="items"></div></section>
+  <div class="form">${fieldHTML({ k: 'note', label: '비고', type: 'textarea', wide: 1 }, d.note)}</div>`;
+  const tot = () => $('#tot').textContent = '예정 합계 ' + won(expTotal(d.items)) + '원';
+  rowsEditor($('#items'), d.items, [['cat','분류','sel',GOODS],['desc','품명','text','wide'],['spec','규격'],['unit','단위'],['qty','수량','number'],['price','예상 단가(원)','number'],['note','비고']], blank, r => '금액 ' + won((Number(r.qty) || 0) * (Number(r.price) || 0)) + '원');
+  $('#items').addEventListener('rowschange', tot); tot();
+  $('#save').onclick = async () => {
+    const v = readForm($('#basic'), F); v.note = $('#f_note').value.trim() || null;
+    if (!v.title || !v.date || !v.author) return toast('제목, 작성일, 작성자를 입력하세요.');
+    const items = d.items.filter(i => i.desc).map(i => ({ ...i, qty: Number(i.qty) || 0, price: Number(i.price) || 0 }));
+    if (!items.length) return toast('품목을 한 줄 이상 입력하세요.');
+    const body = { ...v, items, total: expTotal(items) };
+    if (p) { await q(sb.from('ow_plans').update({ ...body, updated_at: new Date().toISOString() }).eq('id', p.id)); toast('저장했습니다.'); location.hash = '#plan/' + p.id; }
+    else { const r = await q(sb.from('ow_plans').insert({ ...body, site_id: SITE }).select('id').single()); toast('저장했습니다. 결재자에게 알려 주세요.'); location.hash = '#plan/' + r.id; }
+  };
 };
 
 /* ================= 휴가 신청서 (월차·연차·병가·휴가) ================= */
