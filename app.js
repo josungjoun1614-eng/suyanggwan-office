@@ -454,15 +454,62 @@ routes.expenses = async () => {
   bindMonth();
 };
 /* 물품 구입 요청서 → 계획서 → 지출결의서 연결 */
-const chainStep = (label, x, href) => x ? `<a class="chain-s" href="${href}"><small>${label}</small><b>${esc(x.title || '')}</b><span>${esc(x.date || '')} · ${planDone(x) ? '<span class="pill ok">결재 완료</span>' : '<span class="pill acc">결재 중</span>'}</span></a>` : `<span class="chain-s off"><small>${label}</small><b>없음</b></span>`;
-async function purchaseChain({ req, plan, exp }) {
+let CHAIN = null;
+const chainStep = (label, x, href, slot, cur) => x
+  ? `<div class="chain-s${cur ? ' cur' : ''}"><small>${label}${cur ? ' · 지금 보는 서류' : ''}</small>${cur ? `<b>${esc(x.title || '')}</b>` : `<a href="${href}"><b>${esc(x.title || '')}</b></a>`}<span>${esc(x.date || '')} · ${planDone(x) ? '<span class="pill ok">결재 완료</span>' : '<span class="pill acc">결재 중</span>'}</span>${cur ? '' : `<button type="button" class="ghost sm" data-unlink="${slot}">연결 해제</button>`}</div>`
+  : `<div class="chain-s off"><small>${label}</small><b>없음</b><button type="button" class="sm" data-link="${slot}">+ 연결하기</button></div>`;
+async function purchaseChain(ctx) {
+  let { req, plan, exp } = ctx; const cur = req && !plan && !exp ? 'req' : plan && !exp ? 'plan' : 'exp';
   if (exp && !plan && !req) { const ls = await q(sb.from('ow_plans').select('*').eq('expense_id', exp.id)); plan = ls.find(x => x.kind !== '요청서'); req = ls.find(x => x.kind === '요청서'); }
   if (plan && !req) req = (await q(sb.from('ow_plans').select('*').eq('plan_id', plan.id).limit(1)))[0];
   if (req && !plan && req.plan_id) plan = await q(sb.from('ow_plans').select('*').eq('id', req.plan_id).maybeSingle());
   const eid = exp?.id || plan?.expense_id || req?.expense_id;
-  if (!exp && eid) exp = await q(sb.from('ow_expenses').select('id,title,date,approvals,stock_applied_at').eq('id', eid).maybeSingle());
-  if (!req && !plan && !exp) return '';
-  return `<section class="sec noprint"><h3>연결 서류</h3><div class="chain">${chainStep('① 구입 요청서', req, req && '#plan/' + req.id)}<i>→</i>${chainStep('② 구입 계획서', plan, plan && '#plan/' + plan.id)}<i>→</i>${chainStep('③ 지출결의서', exp, exp && '#exp/' + exp.id)}${exp?.stock_applied_at ? '<i>→</i><a class="chain-s" href="#inventory"><small>④ 재고</small><b>입고 완료</b></a>' : ''}</div></section>`;
+  if (!exp && eid) exp = await q(sb.from('ow_expenses').select('id,site_id,title,date,approvals,stock_applied_at').eq('id', eid).maybeSingle());
+  CHAIN = { req, plan, exp, cur };
+  return `<section class="sec noprint" id="chainSec"><h3>연결 서류 <span class="note">요청서 → 계획서 → 결의서를 서로 연결합니다</span></h3><div class="chain">${chainStep('① 구입 요청서', req, req && '#plan/' + req.id, 'req', cur === 'req')}<i>→</i>${chainStep('② 구입 계획서', plan, plan && '#plan/' + plan.id, 'plan', cur === 'plan')}<i>→</i>${chainStep('③ 지출결의서', exp, exp && '#exp/' + exp.id, 'exp', cur === 'exp')}${exp?.stock_applied_at ? '<i>→</i><a class="chain-s" href="#inventory"><small>④ 재고</small><b>입고 완료</b></a>' : ''}</div></section>`;
+}
+const linkRpc = async (src, target, what, unlink = false) => { const { error } = await sb.rpc('ow_link_purchase', { src, target, what, unlink }); if (error) { toast(error.message); return false; } return true; };
+function bindChain() {
+  const box = $('#chainSec'); if (!box || !CHAIN) return; const { req, plan, exp } = CHAIN;
+  box.onclick = async ev => {
+    const ul = ev.target.closest('[data-unlink]'), lk = ev.target.closest('[data-link]'); if (!ul && !lk) return;
+    if (ul) { const slot = ul.dataset.unlink;
+      // 끊을 연결: 화면 기준으로 그 칸과 이어진 고리
+      const op = slot === 'plan' ? (req && req.plan_id === plan.id ? [req.id, 'plan'] : [plan.id, 'expense'])
+        : slot === 'req' ? (plan && req.plan_id === plan?.id ? [req.id, 'plan'] : [req.id, 'expense'])
+        : (plan && plan.expense_id === exp.id ? [plan.id, 'expense'] : [req.id, 'expense']);
+      confirmBox('이 연결을 해제할까요? 서류 자체는 지워지지 않습니다.', '연결 해제', async () => { if (await linkRpc(op[0], null, op[1], true)) { toast('연결을 해제했습니다.'); route(); } }); return; }
+    const slot = lk.dataset.link, site = (req || plan || exp).site_id;
+    let list = [], pick;
+    if (slot === 'plan') {
+      const used = (await q(sb.from('ow_plans').select('plan_id').eq('site_id', site).eq('kind', '요청서'))).map(x => x.plan_id).filter(Boolean);
+      list = (await q(sb.from('ow_plans').select('*').eq('site_id', site).eq('kind', '계획서').order('date', { ascending: false }).limit(60))).filter(x => !used.includes(x.id) && (!exp || !x.expense_id || x.expense_id === exp.id));
+      pick = async x => req ? (await linkRpc(req.id, x.id, 'plan')) && (!exp || x.expense_id || !(req.expense_id === exp.id) || await linkRpc(x.id, exp.id, 'expense')) : await linkRpc(x.id, exp.id, 'expense');
+    } else if (slot === 'req') {
+      list = (await q(sb.from('ow_plans').select('*').eq('site_id', site).eq('kind', '요청서').is('plan_id', null).order('date', { ascending: false }).limit(60))).filter(x => !x.expense_id);
+      pick = async x => plan ? await linkRpc(x.id, plan.id, 'plan') : await linkRpc(x.id, exp.id, 'expense');
+    } else {
+      const src = plan || req;
+      const used = (await q(sb.from('ow_plans').select('expense_id').eq('site_id', site).eq('kind', src.kind || '계획서'))).map(x => x.expense_id).filter(Boolean);
+      list = (await q(sb.from('ow_expenses').select('id,site_id,title,date,total,approvals').eq('site_id', site).eq('kind', '물품구입').order('date', { ascending: false }).limit(60))).filter(x => !used.includes(x.id));
+      pick = async x => await linkRpc(src.id, x.id, 'expense');
+    }
+    const ref = (req || plan || exp).title || '';
+    list.sort((a, b) => (b.title === ref) - (a.title === ref));
+    const name = { req: '구입 요청서', plan: '구입 계획서', exp: '물품구입 지출결의서' }[slot];
+    const newBtn = slot === 'plan' && req && planDone(req) ? '<button type="button" class="pri" data-new="plan">요청서 내용으로 새 계획서 만들기</button>'
+      : slot === 'exp' && planDone(plan || req) ? '<button type="button" class="pri" data-new="exp">이 내용으로 새 결의서 만들기</button>' : '';
+    const m = openModal(`${name} 연결`, `${list.length ? `<p class="note">연결할 ${name}를 고르세요. 제목이 같은 서류가 맨 위에 나옵니다.</p><ul class="list">${list.map(x => `<li><span>${esc(x.date)} · <b>${esc(x.title)}</b> · ${won(x.total)}원 ${planDone(x) ? '<span class="pill ok">결재 완료</span>' : '<span class="pill acc">결재 중</span>'}</span><button type="button" data-pick="${x.id}">연결</button></li>`).join('')}</ul>` : `<p class="note">연결할 수 있는 ${name}가 없습니다.</p>`}
+      ${newBtn ? `<p style="margin-top:12px">${newBtn}</p>` : slot !== 'req' ? `<p class="note" style="margin-top:12px">새로 만들려면 ${slot === 'plan' ? '요청서' : '앞 서류'} 결재가 먼저 끝나야 합니다. 이미 따로 작성한 서류가 있으면 위에서 연결하세요.</p>` : ''}`);
+    m.querySelector('.mb').onclick = async e2 => {
+      const pb = e2.target.closest('[data-pick]'), nb = e2.target.closest('[data-new]');
+      if (pb) { pb.disabled = true; const x = list.find(y => y.id === pb.dataset.pick); if (await pick(x)) { m.close(); toast('연결했습니다.'); route(); } else pb.disabled = false; }
+      if (nb) { nb.disabled = true;
+        const { data, error } = nb.dataset.new === 'plan' ? await sb.rpc('ow_request_to_plan', { req: req.id }) : await sb.rpc('ow_plan_to_expense', { plan: (plan || req).id });
+        if (error) { nb.disabled = false; return toast(error.message); }
+        m.close(); toast('만들고 연결했습니다.'); location.hash = (nb.dataset.new === 'plan' ? '#plan/' : '#exp/') + data; }
+    };
+  };
 }
 routes.exp = async id => {
   const e = await q(sb.from('ow_expenses').select('*').eq('id', id).maybeSingle());
@@ -494,7 +541,7 @@ routes.exp = async id => {
   };
   const banner = await pendingBanner('ow_expenses', e.id);
   const chain = e.kind === '물품구입' ? await purchaseChain({ exp: e }) : '';
-  const render0 = render; render = () => { render0(); if (chain) M().querySelector('.doc').insertAdjacentHTML('afterend', chain); };
+  const render0 = render; render = () => { render0(); if (chain) { M().querySelector('.doc').insertAdjacentHTML('afterend', chain); bindChain(); } };
   render();
 };
 routes['exp-edit'] = async id => {
@@ -710,7 +757,7 @@ routes.plan = async id => {
     const tp = $('#toPlan'); if (tp) tp.onclick = () => confirmBox('이 요청서 내용으로 물품 구입 계획서를 만들까요? 만든 계획서는 다시 결재를 받습니다.', '만들기', async () => {
       const { data, error } = await sb.rpc('ow_request_to_plan', { req: p.id }); if (error) return toast(error.message);
       toast('물품 구입 계획서를 만들었습니다.'); PKIND = '계획서'; location.hash = '#plan/' + data; });
-    if (chain) M().querySelector('.doc').insertAdjacentHTML('afterend', chain);
+    if (chain) { M().querySelector('.doc').insertAdjacentHTML('afterend', chain); bindChain(); }
     const te = $('#toExp'); if (te) te.onclick = () => confirmBox(`이 ${K} 내용으로 물품구입 지출결의서를 만들까요? 만든 뒤 실제 구입 내역에 맞게 고칠 수 있습니다.`, '만들기', async () => {
       const { data, error } = await sb.rpc('ow_plan_to_expense', { plan: p.id }); if (error) return toast(error.message);
       toast('물품구입 지출결의서를 만들었습니다.'); location.hash = '#exp/' + data; });
