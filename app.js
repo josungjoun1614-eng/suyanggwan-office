@@ -777,7 +777,7 @@ routes['leave-edit'] = async id => {
 
 /* ================= 건물 관리 서류 (자격증·법정 교육·법정 점검·안전진단·소방 계획) ================= */
 const DOCS_BUCKET = 'ow-docs';
-const DCATS = ['자격증', '법정 교육', '법정 점검', '안전진단', '소방 계획', '인허가·보험', '계약·용역', '기타'];
+const DCATS = ['자격증', '법정 교육', '법정 점검', '안전진단', '소방 계획', '석면 관리', '인허가·보험', '계약·용역', '기타'];
 const DTEMPLATE = [
   ['자격증', '소방안전관리자', '선임 후 2년마다 실무교육'], ['자격증', '전기안전관리자', '선임 유지'], ['자격증', '위험물안전관리자', '선임 유지'], ['자격증', '보일러(에너지관리) 자격', ''],
   ['법정 교육', '소방안전관리자 실무교육', '2년'], ['법정 교육', '전기안전관리자 직무교육', '3년'], ['법정 교육', '산업안전보건교육 (근로자)', '분기·연간'], ['법정 교육', '직장 내 성희롱 예방교육', '1년'], ['법정 교육', '개인정보보호 교육', '1년'], ['법정 교육', '장애인 인식개선 교육', '1년'], ['법정 교육', '퇴직연금 교육', '1년'],
@@ -785,6 +785,8 @@ const DTEMPLATE = [
   ['안전진단', '건축물 정기 안전점검', '반기'], ['안전진단', '정밀안전점검·진단', '대상 시설별'],
   ['소방 계획', '소방안전관리자 업무 수행 기록표', '월 1회 이상', 'fire_log'], ['법정 점검', '위험물 저장소 일반점검 (지하탱크)', '연 1회 이상', 'tank_check'],
   ['소방 계획', '소방계획서', '1년 (변경 시 수정)', 'fire_plan'], ['소방 계획', '자위소방대 편성표', '변경 시'], ['소방 계획', '소방훈련·교육 실시 기록', '연 1회 이상'],
+  ['석면 관리', '건축물 석면조사 결과서', '보관 (재조사·공사 시 갱신)'], ['석면 관리', '건축물 석면지도', '변경 시 수정·비치'], ['석면 관리', '석면건축물안전관리인 지정·신고', '변경 시 10일 이내 변경신고'],
+  ['석면 관리', '석면건축물안전관리인 교육', '신고 후 1년 이내 이수'], ['석면 관리', '석면건축물 손상상태 조사', '6개월마다', 'asb_check'], ['석면 관리', '실내공기 중 석면농도 측정', '2년마다 (측정기관)'], ['석면 관리', '석면 해체·제거 작업 기록', '작업 시'],
   ['인허가·보험', '건축물대장', ''], ['인허가·보험', '화재보험(다중이용시설 등)', '1년'], ['인허가·보험', '영업·시설 신고증', '']
 ];
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return ymd(x); };
@@ -796,12 +798,14 @@ routes.docs = async () => {
   const all = await q(sb.from('ow_docs').select('*').eq('site_id', SITE).order('category').order('expires', { ascending: true, nullsFirst: false }));
   const rows = DCAT === '전체' ? all : all.filter(d => d.category === DCAT);
   const over = all.filter(d => d.expires && dday(d.expires) < 0).length, d30 = all.filter(d => d.expires && dday(d.expires) >= 0 && dday(d.expires) <= 30).length, d60 = all.filter(d => d.expires && dday(d.expires) > 30 && dday(d.expires) <= 60).length;
-  M().innerHTML = `<div class="head"><h2>건물 관리 서류</h2><div class="ctrls">${all.length ? '' : '<button id="tpl">기본 항목 불러오기</button>'}<a class="btn pri" href="#doc-edit/new">+ 서류 등록</a></div></div>
+  M().innerHTML = `<div class="head"><h2>건물 관리 서류</h2><div class="ctrls">${all.length ? (DTEMPLATE.some(t => !all.some(d => d.title === t[1])) ? '<button id="tpl2" class="ghost">빠진 기본 항목 넣기</button>' : '') : '<button id="tpl">기본 항목 불러오기</button>'}<a class="btn pri" href="#doc-edit/new">+ 서류 등록</a></div></div>
   <div class="kpis"><div class="hot"><b class="num">${all.length}</b><span>등록 서류</span></div><div class="${over ? 'bad' : ''}"><b class="num">${over}</b><span>기한 지남</span></div><div class="${d30 ? 'bad' : ''}"><b class="num">${d30}</b><span>30일 안에 만료</span></div><div><b class="num">${d60}</b><span>60일 안에 만료</span></div></div>
   <div class="ctrls" style="margin:4px 0 12px;flex-wrap:wrap" role="group" aria-label="분류">${['전체', ...DCATS].map(k => `<button type="button" class="${k === DCAT ? 'pri' : 'ghost'}" data-dc="${k}">${k}${k !== '전체' ? ` <small>${all.filter(d => d.category === k).length || ''}</small>` : ''}</button>`).join('')}</div>
   ${rows.length ? `<div class="scroll"><table class="stack"><thead><tr><th>분류</th><th>서류명</th><th>대상·담당</th><th>기관</th><th>취득·시행일</th><th>만료·다음 예정일</th><th>상태</th><th>첨부</th></tr></thead><tbody>${rows.map(d => `<tr><td>${esc(d.category)}</td><td><a href="#doc/${d.id}"><b>${esc(d.title)}</b></a>${d.cycle ? `<br><small class="note">주기 ${esc(d.cycle)}</small>` : ''}</td><td>${esc(d.holder || '')}</td><td>${esc(d.org || '')}</td><td>${esc(d.issued || '')}</td><td>${esc(d.expires || '')}</td><td>${d.expires ? ddayPill(d.expires) : '<span class="pill">기한 없음</span>'}</td><td>${(d.files || []).length ? `📎 ${d.files.length}` : ''}</td></tr>`).join('')}</tbody></table></div>` : `<div class="empty">${DCAT === '전체' ? '등록된 서류가 없습니다. <b>기본 항목 불러오기</b>로 자주 쓰는 법정 서류 목록을 한 번에 넣을 수 있습니다.' : DCAT + ' 서류가 없습니다.'}</div>`}`;
   M().querySelectorAll('[data-dc]').forEach(b => b.onclick = () => { DCAT = b.dataset.dc; route(); });
-  const t = $('#tpl'); if (t) t.onclick = () => confirmBox(`자격증·법정 교육·법정 점검·소방 계획 등 ${DTEMPLATE.length}개 기본 항목을 넣을까요? 날짜와 첨부는 비어 있으니 하나씩 채우면 됩니다. 필요 없는 항목은 관리자가 지울 수 있습니다.`, '넣기', async () => {
+  const t2 = $('#tpl2'); if (t2) t2.onclick = () => { const miss = DTEMPLATE.filter(t => !all.some(d => d.title === t[1])); confirmBox(`아직 없는 기본 항목 ${miss.length}개를 넣을까요? (${miss.map(t => t[1]).join(', ')})`, '넣기', async () => {
+    await q(sb.from('ow_docs').insert(miss.map(([category, title, cycle, form]) => ({ site_id: SITE, category, title, cycle: cycle || null, form: form || null })))); toast(miss.length + '개 항목을 넣었습니다.'); route(); }); };
+  const t = $('#tpl'); if (t) t.onclick = () => confirmBox(`자격증·법정 교육·법정 점검·소방 계획·석면 관리 등 ${DTEMPLATE.length}개 기본 항목을 넣을까요? 날짜와 첨부는 비어 있으니 하나씩 채우면 됩니다. 필요 없는 항목은 관리자가 지울 수 있습니다.`, '넣기', async () => {
     await q(sb.from('ow_docs').insert(DTEMPLATE.map(([category, title, cycle, form]) => ({ site_id: SITE, category, title, cycle: cycle || null, form: form || null })))); toast('기본 항목을 넣었습니다.'); route(); });
 };
 routes.doc = async id => {
@@ -907,6 +911,20 @@ const FORMS = {
     header: [['type', '탱크 형태 (이중벽·전용실 여부)'], ['permit', '설치허가 연월일 및 허가번호', 'wide'], ['installer', '설치자'], ['manager', '안전관리자'], ['name', '사업소명'], ['addr', '설치위치', 'wide'], ['product', '위험물 품명'], ['amount', '허가량'], ['ratio', '지정수량의 배수'], ['facility', '시설명/호칭번호']],
     items: TANK_ITEMS.map(([g, c, m]) => [g, c, m]),
     guide: '지정수량 이상의 위험물은 저장소가 아닌 장소에서 저장·취급할 수 없으며, 저장·취급은 기준 법령에 따릅니다.'
+  },
+  asb_check: {
+    name: '석면건축물 손상상태 조사표', law: '석면안전관리법 제22조, 시행령 제33조, 시행규칙 제26조 (석면건축물 관리기준)', months: 6, cycle: '6개월마다 (6개월이 되는 달 말일까지)',
+    performer: '석면건축물안전관리인', dateLabel: '조사일', results: ['양호', '손상', '비산 우려', '조치완료', '해당없음'],
+    header: [['name', '건축물명'], ['addr', '소재지', 'wide'], ['area', '석면건축자재 면적 합계(㎡)'], ['kind', '석면 종류 (백석면 등)'], ['map', '석면지도 작성일'], ['org', '석면조사기관']],
+    items: [
+      ['천장재', '파손·균열·처짐·탈락 여부'], ['천장재', '누수·습기·얼룩으로 인한 변형'],
+      ['벽체·칸막이', '깨짐·구멍·긁힘, 못·나사 박힘'], ['바닥재', '들뜸·깨짐·마모'],
+      ['지붕재 (슬레이트)', '파손·부식·이끼, 빗물 흐름'], ['배관·보온재', '보온재·개스킷·패킹 손상, 노출 부분'],
+      ['분무재·내화피복재', '부스러짐·박리 여부'], ['비산 가능성', '진동(기계실·문 여닫힘), 기류(공조·환기), 사람 접촉 빈도'],
+      ['표시·관리', '석면 함유 표시, 석면지도 비치, 이용자 안내'], ['공사·보수', '석면 자재 건드리는 공사 여부, 해체·제거 신고']
+    ],
+    reportTitle: '조치 및 관리대장 기록', report: [['fix', '조치 내용 (보수·밀봉·구역 폐쇄 등)'], ['fixdate', '조치일'], ['ledger', '석면건축물 관리대장(정보망) 기록일']],
+    guide: '석면건축물 소유자는 6개월마다 손상 상태와 비산 가능성을 조사하고, 위해성에 따라 보수·밀봉·구역 폐쇄 등 필요한 조치를 한 뒤 석면건축물 관리대장(석면관리 정보망)에 지체 없이 기록해야 합니다. 손상 부위는 직접 만지거나 제거하지 말고 사진을 첨부하세요.'
   }
 };
 const addMonths = (d, n) => { const x = new Date(d); x.setMonth(x.getMonth() + n); return ymd(x); };
@@ -999,7 +1017,7 @@ routes.docrec = async id => {
     <div class="kv">${[[fm.dateLabel, r.date], [fm.performer, (r.performer || '') + ' (서명)'], ...fm.header.map(([k, l]) => [l, h[k]])].map(([k, v]) => `<div><span>${esc(k)}</span>${esc(v || '')}</div>`).join('')}</div>
     <div class="scroll" style="margin-top:14px"><table class="stack"><thead><tr><th>점검항목</th><th>${d.form === 'fire_log' ? '확인내용' : '점검내용'}</th>${fm.items[0][2] ? '<th>점검방법</th>' : ''}<th>결과</th><th>조치 내용</th></tr></thead>
     <tbody>${fm.items.map(([g, c, m], i) => `<tr><td>${i && fm.items[i - 1][0] === g ? '' : `<b>${esc(g)}</b>`}</td><td>${esc(c)}</td>${m !== undefined ? `<td>${esc(m)}</td>` : ''}<td>${resPill(res[i]?.r)}</td><td>${esc(res[i]?.fix || '')}</td></tr>`).join('')}</tbody></table></div>
-    ${fm.report ? `<section class="sec"><h3>불량사항 개선보고</h3><div class="kv">${fm.report.map(([k, l]) => `<div><span>${esc(l)}</span>${esc(rp[k] || '')}</div>`).join('')}</div></section>` : ''}
+    ${fm.report ? `<section class="sec"><h3>${esc(fm.reportTitle || '불량사항 개선보고')}</h3><div class="kv">${fm.report.map(([k, l]) => `<div><span>${esc(l)}</span>${esc(rp[k] || '')}</div>`).join('')}</div></section>` : ''}
     ${r.note ? `<section class="sec"><h3>기타사항</h3><p class="pre">${esc(r.note)}</p></section>` : ''}
     ${(r.files || []).length ? `<section class="sec noprint"><h3>첨부 (원본)</h3><ul class="list">${r.files.map((f, i) => `<li><span>📄 ${esc(f.name)}</span><button class="ghost" data-open="${i}">열기</button></li>`).join('')}</ul></section>` : ''}
     <p class="note" style="margin-top:14px">※ ${esc(fm.guide)}</p>
@@ -1025,7 +1043,7 @@ routes['docrec-edit'] = async arg => {
   ${fm.header.map(([k, l, w]) => fieldHTML({ k: 'h_' + k, label: l, wide: w ? 1 : 0 }, h[k])).join('')}</div>
   <section class="sec"><h3>점검 항목 <span class="note">${r ? '' : prev ? '기본 정보는 지난 기록에서 가져왔습니다 · ' : ''}<button type="button" class="ghost" id="allok">모두 양호</button></span></h3>
   <div class="scroll"><table class="stack"><thead><tr><th>점검항목</th><th>내용</th><th>결과</th><th>조치 내용</th></tr></thead><tbody>${fm.items.map(([g, c, m], i) => `<tr><td>${i && fm.items[i - 1][0] === g ? '' : `<b>${esc(g)}</b>`}</td><td>${esc(c)}${m ? ` <small class="note">(${esc(m)})</small>` : ''}</td><td><select data-ri="${i}" style="min-width:96px"><option value=""></option>${fm.results.map(o => `<option${res[i]?.r === o ? ' selected' : ''}>${o}</option>`).join('')}</select></td><td><input data-fi="${i}" value="${esc(res[i]?.fix || '')}" placeholder="불량·보완 시 조치"></td></tr>`).join('')}</tbody></table></div></section>
-  ${fm.report ? `<section class="sec"><h3>불량사항 개선보고</h3><div class="form" id="rp">${fm.report.map(([k, l]) => fieldHTML({ k: 'r_' + k, label: l }, rp[k])).join('')}</div></section>` : ''}
+  ${fm.report ? `<section class="sec"><h3>${esc(fm.reportTitle || '불량사항 개선보고')}</h3><div class="form" id="rp">${fm.report.map(([k, l]) => fieldHTML({ k: 'r_' + k, label: l }, rp[k])).join('')}</div></section>` : ''}
   <div class="form">${fieldHTML({ k: 'note', label: '기타사항', type: 'textarea', wide: 1 }, r?.note)}</div>
   <section class="sec"><h3>원본 첨부 <span class="note">서명한 서식 스캔·사진·한글 파일 등</span></h3><div id="rf"></div><label class="drop" style="margin-top:8px"><b>파일 올리기</b><span>PDF·한글·사진</span><input id="rfin" type="file" accept=".pdf,.hwp,.hwpx,image/*" multiple hidden></label></section>`;
   const drawF = () => $('#rf').innerHTML = files.length ? `<ul class="list">${files.map((f, i) => `<li><span>📄 ${esc(f.name)}</span><button type="button" class="ghost" data-rm="${i}">빼기</button></li>`).join('')}</ul>` : '<p class="note">첨부 없음</p>';
