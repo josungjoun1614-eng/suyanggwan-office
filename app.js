@@ -214,7 +214,7 @@ const pending = rows => rows.filter(r => !(r.approvals || {})[lastRole()]).lengt
 const stampsHTML = ap => `<div class="stamps">${S.roles.map(r => `<i class="${(ap || {})[r] ? 'on' : ''}">${esc(r)}</i>`).join('')}</div>`;
 
 /* ---------- 라우터 ---------- */
-const NAV = { doc: 'docs', 'doc-edit': 'docs', plan: 'plans', 'plan-edit': 'plans', leave: 'leaves', 'leave-edit': 'leaves', log: 'logs', 'log-edit': 'logs', exp: 'expenses', 'exp-edit': 'expenses', check: 'checks', 'check-edit': 'checks' };
+const NAV = { docrec: 'docs', 'docrec-edit': 'docs', doc: 'docs', 'doc-edit': 'docs', plan: 'plans', 'plan-edit': 'plans', leave: 'leaves', 'leave-edit': 'leaves', log: 'logs', 'log-edit': 'logs', exp: 'expenses', 'exp-edit': 'expenses', check: 'checks', 'check-edit': 'checks' };
 const routes = {};
 async function route() {
   if (!ME) return;
@@ -763,6 +763,7 @@ const DTEMPLATE = [
   ['법정 교육', '소방안전관리자 실무교육', '2년'], ['법정 교육', '전기안전관리자 직무교육', '3년'], ['법정 교육', '산업안전보건교육 (근로자)', '분기·연간'], ['법정 교육', '직장 내 성희롱 예방교육', '1년'], ['법정 교육', '개인정보보호 교육', '1년'], ['법정 교육', '장애인 인식개선 교육', '1년'], ['법정 교육', '퇴직연금 교육', '1년'],
   ['법정 점검', '소방시설 작동점검', '1년'], ['법정 점검', '소방시설 종합점검', '1년 (대상 건물)'], ['법정 점검', '전기설비 정기검사·점검', '3년 / 월차 점검'], ['법정 점검', '승강기 정기검사', '1년'], ['법정 점검', '가스시설 정기검사', '1년'], ['법정 점검', '저수조 청소·수질검사', '반기 / 1년'], ['법정 점검', '정화조 청소·방류수 검사', '1년'], ['법정 점검', '보일러 계속사용검사', '1년'],
   ['안전진단', '건축물 정기 안전점검', '반기'], ['안전진단', '정밀안전점검·진단', '대상 시설별'],
+  ['소방 계획', '소방안전관리자 업무 수행 기록표', '월 1회 이상', 'fire_log'], ['법정 점검', '위험물 저장소 일반점검 (지하탱크)', '연 1회 이상', 'tank_check'],
   ['소방 계획', '소방계획서', '1년'], ['소방 계획', '자위소방대 편성표', '변경 시'], ['소방 계획', '소방훈련·교육 실시 기록', '연 1회 이상'],
   ['인허가·보험', '건축물대장', ''], ['인허가·보험', '화재보험(다중이용시설 등)', '1년'], ['인허가·보험', '영업·시설 신고증', '']
 ];
@@ -781,7 +782,7 @@ routes.docs = async () => {
   ${rows.length ? `<div class="scroll"><table class="stack"><thead><tr><th>분류</th><th>서류명</th><th>대상·담당</th><th>기관</th><th>취득·시행일</th><th>만료·다음 예정일</th><th>상태</th><th>첨부</th></tr></thead><tbody>${rows.map(d => `<tr><td>${esc(d.category)}</td><td><a href="#doc/${d.id}"><b>${esc(d.title)}</b></a>${d.cycle ? `<br><small class="note">주기 ${esc(d.cycle)}</small>` : ''}</td><td>${esc(d.holder || '')}</td><td>${esc(d.org || '')}</td><td>${esc(d.issued || '')}</td><td>${esc(d.expires || '')}</td><td>${d.expires ? ddayPill(d.expires) : '<span class="pill">기한 없음</span>'}</td><td>${(d.files || []).length ? `📎 ${d.files.length}` : ''}</td></tr>`).join('')}</tbody></table></div>` : `<div class="empty">${DCAT === '전체' ? '등록된 서류가 없습니다. <b>기본 항목 불러오기</b>로 자주 쓰는 법정 서류 목록을 한 번에 넣을 수 있습니다.' : DCAT + ' 서류가 없습니다.'}</div>`}`;
   M().querySelectorAll('[data-dc]').forEach(b => b.onclick = () => { DCAT = b.dataset.dc; route(); });
   const t = $('#tpl'); if (t) t.onclick = () => confirmBox(`자격증·법정 교육·법정 점검·소방 계획 등 ${DTEMPLATE.length}개 기본 항목을 넣을까요? 날짜와 첨부는 비어 있으니 하나씩 채우면 됩니다. 필요 없는 항목은 관리자가 지울 수 있습니다.`, '넣기', async () => {
-    await q(sb.from('ow_docs').insert(DTEMPLATE.map(([category, title, cycle]) => ({ site_id: SITE, category, title, cycle: cycle || null })))); toast('기본 항목을 넣었습니다.'); route(); });
+    await q(sb.from('ow_docs').insert(DTEMPLATE.map(([category, title, cycle, form]) => ({ site_id: SITE, category, title, cycle: cycle || null, form: form || null })))); toast('기본 항목을 넣었습니다.'); route(); });
 };
 routes.doc = async id => {
   const d = await q(sb.from('ow_docs').select('*').eq('id', id).maybeSingle());
@@ -790,7 +791,10 @@ routes.doc = async id => {
   <div class="doc"><div class="doctop"><h2>${esc(d.title)}</h2>${d.expires ? ddayPill(d.expires) : ''}</div>
   <div class="kv">${[['분류', d.category], ['대상·담당', d.holder], ['발급·시행 기관', d.org], ['취득·시행일', d.issued], ['만료·다음 예정일', d.expires], ['주기', d.cycle], ['최근 수정', lt(d.updated_at)]].map(([k, v]) => `<div><span>${k}</span>${esc(v || '')}</div>`).join('')}</div>
   ${d.note ? `<section class="sec"><h3>메모</h3><p class="pre">${esc(d.note)}</p></section>` : ''}
+  ${FORMS[d.form] ? `<section class="sec"><h3>${esc(FORMS[d.form].name)} 기록 <a class="btn pri" href="#docrec-edit/new-${d.id}" style="margin-left:8px">+ 기록 작성</a></h3><div id="recs"><p class="note">불러오는 중…</p></div></section>` : ''}
   <section class="sec"><h3>첨부 서류</h3>${(d.files || []).length ? `<ul class="list">${d.files.map((f, i) => `<li><span>${/^image\//.test(f.type || '') ? '🖼️' : '📄'} ${esc(f.name)}</span><button class="ghost" data-open="${i}">열기</button></li>`).join('')}</ul>` : '<p class="note">첨부된 파일이 없습니다. <b>수정·갱신</b>에서 PDF·사진·한글·엑셀 파일을 올릴 수 있습니다.</p>'}</section></div>`;
+  if (FORMS[d.form]) { const fm = FORMS[d.form]; const recs = await q(sb.from('ow_doc_records').select('id,date,performer,results').eq('doc_id', d.id).order('date', { ascending: false }).limit(60));
+    $('#recs').innerHTML = recs.length ? `<div class="scroll"><table class="stack"><thead><tr><th>${fm.dateLabel}</th><th>${fm.performer}</th><th>결과</th></tr></thead><tbody>${recs.map(x => { const bad = Object.values(x.results || {}).filter(v => v?.r && !['양호', '해당없음'].includes(v.r)).length; return `<tr><td><a href="#docrec/${x.id}"><b>${esc(x.date)}</b></a></td><td>${esc(x.performer || '')}</td><td>${bad ? `<span class="pill bad">확인 필요 ${bad}건</span>` : '<span class="pill ok">모두 양호</span>'}</td></tr>`; }).join('')}</tbody></table></div>` : `<p class="note">아직 기록이 없습니다. ${esc(fm.cycle)} 작성하세요.</p>`; }
   M().querySelectorAll('[data-open]').forEach(b => b.onclick = async () => { const w = window.open('', '_blank'); try { const u = await docUrl(d.files[+b.dataset.open].path); if (w) w.location = u; else location.href = u; } catch (e) { w && w.close(); toast('파일을 열지 못했습니다: ' + e.message); } });
   const del = $('#del'); if (del) del.onclick = () => confirmBox(`'${d.title}' 서류를 삭제할까요? 첨부 파일도 함께 지워집니다.`, '삭제', async () => {
     if ((d.files || []).length) await sb.storage.from(DOCS_BUCKET).remove(d.files.map(f => f.path));
@@ -803,7 +807,8 @@ routes['doc-edit'] = async id => {
   d.files = d.files || [];
   const removed = [];
   const F = [{ k: 'category', label: '분류', type: 'select', options: DCATS, req: 1 }, { k: 'title', label: '서류명', req: 1, wide: 1 }, { k: 'holder', label: '대상·담당 (자격증 소지자, 교육 이수자 등)', list: 'staffList' }, { k: 'org', label: '발급·시행 기관' },
-    { k: 'issued', label: '취득·시행일', type: 'date' }, { k: 'expires', label: '만료·다음 예정일', type: 'date' }, { k: 'cycle', label: '주기 (예: 1년, 2년, 반기)' }, { k: 'note', label: '메모', type: 'textarea', wide: 1 }];
+    { k: 'issued', label: '취득·시행일', type: 'date' }, { k: 'expires', label: '만료·다음 예정일', type: 'date' }, { k: 'cycle', label: '주기 (예: 1년, 2년, 반기)' }, { k: 'form', label: '기록 양식 (해당 시)', type: 'select', options: ['없음', ...Object.values(FORMS).map(f => f.name)] }, { k: 'note', label: '메모', type: 'textarea', wide: 1 }];
+  d.form = FORMS[d.form]?.name || '없음';
   M().innerHTML = `<div class="head"><h2>${d0 ? '서류 수정·갱신' : '서류 등록'}</h2><div class="ctrls"><a class="btn ghost" href="${d0 ? '#doc/' + d0.id : '#docs'}">취소</a><button class="pri" id="save">저장</button></div></div>
   <div class="form" id="basic">${F.map(f => fieldHTML(f, d[f.k])).join('')}</div>
   <section class="sec"><h3>첨부 서류 <span class="note">PDF·사진·한글·엑셀·워드, 파일당 20MB까지 · 해당 수양관 로그인 사용자만 열람</span></h3><div id="files"></div>
@@ -826,12 +831,122 @@ routes['doc-edit'] = async id => {
   };
   $('#save').onclick = async () => {
     const v = readForm($('#basic'), F); if (!v.title) return toast('서류명을 입력하세요.');
+    v.form = Object.keys(FORMS).find(k => FORMS[k].name === v.form) || null;
     const body = { ...v, files: d.files, updated_at: new Date().toISOString() };
     let target;
     if (d0) { await q(sb.from('ow_docs').update(body).eq('id', d0.id)); target = d0.id; }
     else { target = (await q(sb.from('ow_docs').insert({ ...body, site_id: SITE }).select('id').single())).id; }
     if (removed.length && isAdmin()) await sb.storage.from(DOCS_BUCKET).remove(removed.map(f => f.path));
     toast('저장했습니다.'); location.hash = '#doc/' + target;
+  };
+};
+
+/* ---------- 서식 기록 (소방안전관리자 업무 수행 기록표 · 위험물 지하탱크저장소 일반점검표) ---------- */
+const TANK_ITEMS = [
+  ['탱크본체', '누설의 유무', '육안'],
+  ['상부', '뚜껑의 균열·변형·손상·부등침하의 유무', '육안 및 실측'], ['상부', '허가외 구조물 설치여부', '육안'],
+  ['맨홀', '변형·손상·토사 등의 퇴적의 유무', '육안'],
+  ['통기관', '인화방지망의 손상·막힘의 유무', '육안'], ['통기관', '밸브의 작동상황', '작동확인'], ['통기관', '관내의 장애물의 유무', '육안'], ['통기관', '도장상황 및 부식의 유무', '육안'],
+  ['안전장치', '부식·손상의 유무', '육안'], ['안전장치', '작동상황', '육안 및 작동확인'],
+  ['가연성증기회수장치', '손상의 유무', '육안'], ['가연성증기회수장치', '작동상황', '육안 및 작동확인'],
+  ['계측장치 · 액량자동표시장치', '손상의 유무', '육안'], ['계측장치 · 액량자동표시장치', '작동상황', '육안 및 작동확인'], ['계측장치 · 액량자동표시장치', '부착부의 손상의 유무', '육안'],
+  ['계측장치 · 온도계', '손상의 유무', '육안'], ['계측장치 · 온도계', '작동상황', '육안 및 작동확인'], ['계측장치 · 온도계', '부착부의 손상의 유무', '육안'],
+  ['계측장치 · 계량구', '덮개의 폐쇄상황', '육안'], ['계측장치 · 계량구', '변형·손상의 유무', '육안'],
+  ['누설검지관', '변형·손상·토사 등의 퇴적의 유무', '육안'],
+  ['누설검지장치 (이중벽탱크)', '손상의 유무', '육안'], ['누설검지장치 (이중벽탱크)', '경보장치의 기능의 적부', '작동확인'],
+  ['주입구', '폐쇄시의 누설의 유무', '육안'], ['주입구', '변형·손상의 유무', '육안'], ['주입구', '접지전극손상의 유무', '육안'], ['주입구', '접지저항치의 적부', '접지저항측정'],
+  ['주입구의 비트', '균열·손상의 유무', '육안'], ['주입구의 비트', '체유·체수·토사 등의 퇴적의 유무', '육안'],
+  ['배관 (플랜지·밸브 포함)', '누설의 유무', '육안'], ['배관 (플랜지·밸브 포함)', '변형·손상의 유무', '육안'], ['배관 (플랜지·밸브 포함)', '도장상황 및 부식의 유무', '육안'], ['배관 (플랜지·밸브 포함)', '지반면과 이격상태', '육안'],
+  ['배관의 비트', '균열·손상의 유무', '육안'], ['배관의 비트', '체유·체수·토사 등의 퇴적의 유무', '육안'],
+  ['전기방식 설비', '단자함의 손상·토사 등의 퇴적의 유무', '육안'], ['전기방식 설비', '단자의 탈락의 유무', '육안'], ['전기방식 설비', '방식전류(전위)의 적부', '전위측정'],
+  ['점검함', '균열·손상·체유·체수·토사 등의 퇴적의 유무', '육안'],
+  ['밸브', '누설·손상의 유무', '육안'], ['밸브', '폐쇄기능의 적부', '작동확인'],
+  ['펌프설비 · 전동기', '손상의 유무', '육안'], ['펌프설비 · 전동기', '고정상태의 적부', '육안'], ['펌프설비 · 전동기', '회전부 등의 급유상태', '육안'], ['펌프설비 · 전동기', '이상진동·소음·발열 등의 유무', '작동확인'],
+  ['펌프설비 · 펌프', '누설의 유무', '육안'], ['펌프설비 · 펌프', '변형·손상의 유무', '육안'], ['펌프설비 · 펌프', '도장상태 및 부식의 유무', '육안'], ['펌프설비 · 펌프', '고정상태의 적부', '육안'], ['펌프설비 · 펌프', '회전부 등의 급유상태', '육안'], ['펌프설비 · 펌프', '유량 및 유압의 적부', '육안'], ['펌프설비 · 펌프', '이상진동·소음·발열 등의 유무', '작동확인'], ['펌프설비 · 펌프', '기초의 균열·손상의 유무', '육안'],
+  ['펌프설비 · 접지', '단선의 유무', '육안'], ['펌프설비 · 접지', '부착부분의 탈락의 유무', '육안'], ['펌프설비 · 접지', '접지저항치의 적부', '저항측정'],
+  ['펌프설비 · 주위·바닥·집유설비·유분리장치', '균열·손상 등의 유무', '육안'], ['펌프설비 · 주위·바닥·집유설비·유분리장치', '체유·체수·토사 등의 퇴적의 유무', '육안'],
+  ['펌프설비 · 펌프실', '지붕·벽·바닥·방화문 등의 균열·손상의 유무', '육안'], ['펌프설비 · 펌프실', '환기·배출설비 등의 손상의 유무 및 기능의 적부', '육안 및 작동확인'], ['펌프설비 · 펌프실', '조명설비의 손상의 유무', '육안'],
+  ['전기설비 · 배전반·차단기·배선 등', '변형·손상의 유무', '육안'], ['전기설비 · 배전반·차단기·배선 등', '고정상태의 적부', '육안'], ['전기설비 · 배전반·차단기·배선 등', '기능의 적부', '육안 및 작동확인'], ['전기설비 · 배전반·차단기·배선 등', '배선접합부의 탈락의 유무', '육안'],
+  ['전기설비 · 접지', '단선의 유무', '육안'], ['전기설비 · 접지', '부착부분의 탈락의 유무', '육안'], ['전기설비 · 접지', '접지저항치의 적부', '저항측정'],
+  ['표지·게시판', '손상의 유무', '육안'], ['표지·게시판', '기재사항의 적부', '육안'],
+  ['소화기', '위치·설치수·압력의 적부', '육안'],
+  ['경보설비', '손상의 유무', '육안'], ['경보설비', '기능의 적부', '작동확인']
+];
+const FORMS = {
+  fire_log: {
+    name: '소방안전관리자 업무 수행 기록표', law: '화재의 예방 및 안전관리에 관한 법률 시행규칙 [별지 제12호서식]', months: 1, cycle: '월 1회 이상',
+    performer: '수행자', dateLabel: '수행일자', results: ['양호', '불량'],
+    header: [['name', '상호'], ['grade', '등급 (특급·1급·2급·3급)'], ['addr', '소재지', 'wide'], ['basement', '지하층'], ['floors', '지상층'], ['area', '연면적(㎡)'], ['floorArea', '바닥면적(㎡)'], ['bldgs', '동수']],
+    items: [['소방시설', '소화기·옥내소화전설비·소화용수설비·비상조명등·유도등(피난구 유도등, 통로 유도등)'], ['피난방화시설', '방화문·피난계단·피난통로·복도, 출구 통로'], ['화기취급감독', '방화문 자동폐쇄 정상 작동·비상구 잠금·폐쇄 금지·유도등 점등 여부·피난방화시설 점검 체크리스트'], ['기타사항', '소방시설 점검결과 보고서로 갈음']],
+    report: [['at', '보고일시'], ['how', '보고방법 (대면·서면·정보통신)'], ['to', '보고받은 사람'], ['fix', '조치방법 (이전·제거·수리·교체·기타)']],
+    guide: '소방안전관리자는 업무를 수행한 날을 포함하여 월 1회 이상 작성합니다. 경보설비 수신기, 소화설비 제어반, 가압송수장치(펌프 등)를 중점적으로 확인하세요.'
+  },
+  tank_check: {
+    name: '지하탱크저장소 일반점검표', law: '위험물안전관리에 관한 세부기준 [별지 제12호서식]', months: 12, cycle: '연 1회 이상',
+    performer: '점검자', dateLabel: '점검연월일', results: ['양호', '불량', '보완중', '해당없음'],
+    header: [['type', '탱크 형태 (이중벽·전용실 여부)'], ['permit', '설치허가 연월일 및 허가번호', 'wide'], ['installer', '설치자'], ['manager', '안전관리자'], ['name', '사업소명'], ['addr', '설치위치', 'wide'], ['product', '위험물 품명'], ['amount', '허가량'], ['ratio', '지정수량의 배수'], ['facility', '시설명/호칭번호']],
+    items: TANK_ITEMS.map(([g, c, m]) => [g, c, m]),
+    guide: '지정수량 이상의 위험물은 저장소가 아닌 장소에서 저장·취급할 수 없으며, 저장·취급은 기준 법령에 따릅니다.'
+  }
+};
+const addMonths = (d, n) => { const x = new Date(d); x.setMonth(x.getMonth() + n); return ymd(x); };
+const resPill = r => r ? `<span class="pill ${r === '양호' ? 'ok' : r === '해당없음' ? '' : 'bad'}">${esc(r)}</span>` : '';
+routes.docrec = async id => {
+  const r = await q(sb.from('ow_doc_records').select('*').eq('id', id).maybeSingle());
+  if (!r) { M().innerHTML = '<div class="empty">기록을 찾을 수 없습니다.</div>'; return; }
+  const d = await q(sb.from('ow_docs').select('id,title,form').eq('id', r.doc_id).maybeSingle());
+  const fm = FORMS[d?.form]; if (!fm) { M().innerHTML = '<div class="empty">양식을 찾을 수 없습니다.</div>'; return; }
+  const h = r.header || {}, res = r.results || {}, rp = r.report || {};
+  const bad = fm.items.filter((_, i) => res[i]?.r && !['양호', '해당없음'].includes(res[i].r)).length;
+  M().innerHTML = `<div class="head noprint"><a class="btn ghost" href="#doc/${r.doc_id}">← ${esc(d.title)}</a><div class="ctrls">${isAdmin() ? '<button class="ghost danger" id="del">삭제</button>' : ''}<a class="btn" href="#docrec-edit/${r.id}">수정</a><button class="pri" onclick="print()">인쇄</button></div></div>
+  <div class="doc">
+    <p class="note" style="margin:0">${esc(fm.law)}</p>
+    <div class="doctop"><h2>${esc(fm.name)}</h2>${bad ? `<span class="pill bad">확인 필요 ${bad}건</span>` : '<span class="pill ok">모두 양호</span>'}</div>
+    <div class="kv">${[[fm.dateLabel, r.date], [fm.performer, (r.performer || '') + ' (서명)'], ...fm.header.map(([k, l]) => [l, h[k]])].map(([k, v]) => `<div><span>${esc(k)}</span>${esc(v || '')}</div>`).join('')}</div>
+    <div class="scroll" style="margin-top:14px"><table class="stack"><thead><tr><th>점검항목</th><th>${d.form === 'fire_log' ? '확인내용' : '점검내용'}</th>${fm.items[0][2] ? '<th>점검방법</th>' : ''}<th>결과</th><th>조치 내용</th></tr></thead>
+    <tbody>${fm.items.map(([g, c, m], i) => `<tr><td>${i && fm.items[i - 1][0] === g ? '' : `<b>${esc(g)}</b>`}</td><td>${esc(c)}</td>${m !== undefined ? `<td>${esc(m)}</td>` : ''}<td>${resPill(res[i]?.r)}</td><td>${esc(res[i]?.fix || '')}</td></tr>`).join('')}</tbody></table></div>
+    ${fm.report ? `<section class="sec"><h3>불량사항 개선보고</h3><div class="kv">${fm.report.map(([k, l]) => `<div><span>${esc(l)}</span>${esc(rp[k] || '')}</div>`).join('')}</div></section>` : ''}
+    ${r.note ? `<section class="sec"><h3>기타사항</h3><p class="pre">${esc(r.note)}</p></section>` : ''}
+    ${(r.files || []).length ? `<section class="sec noprint"><h3>첨부 (원본)</h3><ul class="list">${r.files.map((f, i) => `<li><span>📄 ${esc(f.name)}</span><button class="ghost" data-open="${i}">열기</button></li>`).join('')}</ul></section>` : ''}
+    <p class="note" style="margin-top:14px">※ ${esc(fm.guide)}</p>
+  </div>`;
+  M().querySelectorAll('[data-open]').forEach(b => b.onclick = async () => { const w = window.open('', '_blank'); try { const u = await docUrl(r.files[+b.dataset.open].path); if (w) w.location = u; else location.href = u; } catch (e) { w && w.close(); toast('파일을 열지 못했습니다: ' + e.message); } });
+  const del = $('#del'); if (del) del.onclick = () => confirmBox(`${r.date} 기록을 삭제할까요?`, '삭제', async () => { await q(sb.from('ow_doc_records').delete().eq('id', r.id)); toast('삭제했습니다.'); location.hash = '#doc/' + r.doc_id; });
+};
+routes['docrec-edit'] = async arg => {
+  let r = null, docId;
+  if (arg && arg.startsWith('new-')) docId = arg.slice(4);
+  else { r = await q(sb.from('ow_doc_records').select('*').eq('id', arg).maybeSingle()); if (!r) { M().innerHTML = '<div class="empty">기록을 찾을 수 없습니다.</div>'; return; } docId = r.doc_id; }
+  const d = await q(sb.from('ow_docs').select('*').eq('id', docId).maybeSingle());
+  const fm = FORMS[d?.form]; if (!fm) { M().innerHTML = '<div class="empty">이 서류에는 기록 양식이 없습니다.</div>'; return; }
+  let prev = null;
+  if (!r) prev = (await q(sb.from('ow_doc_records').select('header,report').eq('doc_id', docId).order('date', { ascending: false }).limit(1)))[0];
+  const h = r?.header || prev?.header || {}, res = structuredClone(r?.results || {}), rp = r?.report || {}, files = structuredClone(r?.files || []);
+  M().innerHTML = `<div class="head"><h2>${esc(fm.name)} ${r ? '수정' : '작성'}</h2><div class="ctrls"><a class="btn ghost" href="${r ? '#docrec/' + r.id : '#doc/' + docId}">취소</a><button class="pri" id="save">저장</button></div></div>
+  <div class="form" id="hd">${fieldHTML({ k: 'date', label: fm.dateLabel, type: 'date', req: 1 }, r?.date || today())}${fieldHTML({ k: 'performer', label: fm.performer, list: 'staffList', req: 1 }, r?.performer || d.holder || myName())}
+  ${fm.header.map(([k, l, w]) => fieldHTML({ k: 'h_' + k, label: l, wide: w ? 1 : 0 }, h[k])).join('')}</div>
+  <section class="sec"><h3>점검 항목 <span class="note">${r ? '' : prev ? '기본 정보는 지난 기록에서 가져왔습니다 · ' : ''}<button type="button" class="ghost" id="allok">모두 양호</button></span></h3>
+  <div class="scroll"><table class="stack"><thead><tr><th>점검항목</th><th>내용</th><th>결과</th><th>조치 내용</th></tr></thead><tbody>${fm.items.map(([g, c, m], i) => `<tr><td>${i && fm.items[i - 1][0] === g ? '' : `<b>${esc(g)}</b>`}</td><td>${esc(c)}${m ? ` <small class="note">(${esc(m)})</small>` : ''}</td><td><select data-ri="${i}" style="min-width:96px"><option value=""></option>${fm.results.map(o => `<option${res[i]?.r === o ? ' selected' : ''}>${o}</option>`).join('')}</select></td><td><input data-fi="${i}" value="${esc(res[i]?.fix || '')}" placeholder="불량·보완 시 조치"></td></tr>`).join('')}</tbody></table></div></section>
+  ${fm.report ? `<section class="sec"><h3>불량사항 개선보고</h3><div class="form" id="rp">${fm.report.map(([k, l]) => fieldHTML({ k: 'r_' + k, label: l }, rp[k])).join('')}</div></section>` : ''}
+  <div class="form">${fieldHTML({ k: 'note', label: '기타사항', type: 'textarea', wide: 1 }, r?.note)}</div>
+  <section class="sec"><h3>원본 첨부 <span class="note">서명한 서식 스캔·사진·한글 파일 등</span></h3><div id="rf"></div><label class="drop" style="margin-top:8px"><b>파일 올리기</b><span>PDF·한글·사진</span><input id="rfin" type="file" accept=".pdf,.hwp,.hwpx,image/*" multiple hidden></label></section>`;
+  const drawF = () => $('#rf').innerHTML = files.length ? `<ul class="list">${files.map((f, i) => `<li><span>📄 ${esc(f.name)}</span><button type="button" class="ghost" data-rm="${i}">빼기</button></li>`).join('')}</ul>` : '<p class="note">첨부 없음</p>';
+  drawF(); $('#rf').onclick = e => { const b = e.target.closest('[data-rm]'); if (b) { files.splice(+b.dataset.rm, 1); drawF(); } };
+  $('#rfin').onchange = async e => { for (const f of e.target.files) { if (f.size > 20 * 1024 * 1024) { toast(f.name + ': 20MB 초과'); continue; } const ext = (f.name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, ''); const path = `${d.site_id}/${uid()}.${ext}`; const { error } = await sb.storage.from(DOCS_BUCKET).upload(path, f, { contentType: f.type || 'application/octet-stream' }); if (error) { toast('올리지 못했습니다: ' + error.message); continue; } files.push({ path, name: f.name, type: f.type || '' }); drawF(); } e.target.value = ''; };
+  M().addEventListener('change', e => { const i = e.target.dataset.ri; if (i !== undefined) (res[i] ||= {}).r = e.target.value; });
+  M().addEventListener('input', e => { const i = e.target.dataset.fi; if (i !== undefined) (res[i] ||= {}).fix = e.target.value; });
+  $('#allok').onclick = () => { M().querySelectorAll('[data-ri]').forEach(s => { if (!s.value) { s.value = '양호'; (res[s.dataset.ri] ||= {}).r = '양호'; } }); };
+  $('#save').onclick = async () => {
+    const date = $('#f_date').value, performer = $('#f_performer').value.trim();
+    if (!date || !performer) return toast(`${fm.dateLabel}와 ${fm.performer}를 입력하세요.`);
+    const header = {}; fm.header.forEach(([k]) => header[k] = $('#f_h_' + k).value.trim());
+    const report = {}; (fm.report || []).forEach(([k]) => report[k] = $('#f_r_' + k).value.trim());
+    const body = { date, performer, header, results: res, report, note: $('#f_note').value.trim() || null, files, updated_at: new Date().toISOString() };
+    let id;
+    if (r) { await q(sb.from('ow_doc_records').update(body).eq('id', r.id)); id = r.id; }
+    else id = (await q(sb.from('ow_doc_records').insert({ ...body, doc_id: docId, site_id: d.site_id }).select('id').single())).id;
+    if (!d.issued || date >= d.issued) await q(sb.from('ow_docs').update({ issued: date, expires: addMonths(date, fm.months), holder: d.holder || performer, cycle: d.cycle || fm.cycle, updated_at: new Date().toISOString() }).eq('id', docId));
+    toast(`저장했습니다. 다음 예정일을 ${addMonths(date, fm.months)}로 맞췄습니다.`); location.hash = '#docrec/' + id;
   };
 };
 
