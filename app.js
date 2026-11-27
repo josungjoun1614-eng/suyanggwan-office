@@ -816,7 +816,7 @@ routes.doc = async id => {
   <div class="doc"><div class="doctop"><h2>${esc(d.title)}</h2>${d.expires ? ddayPill(d.expires) : ''}</div>
   <div class="kv">${[['분류', d.category], ['대상·담당', d.holder], ['발급·시행 기관', d.org], ['취득·시행일', d.issued], ['만료·다음 예정일', d.expires], ['주기', d.cycle], ['최근 수정', lt(d.updated_at)]].map(([k, v]) => `<div><span>${k}</span>${esc(v || '')}</div>`).join('')}</div>
   ${d.note ? `<section class="sec"><h3>메모</h3><p class="pre">${esc(d.note)}</p></section>` : ''}
-  ${FORMS[d.form] ? `<section class="sec"><h3>${esc(FORMS[d.form].name)} 기록 <a class="btn pri" href="#docrec-edit/new-${d.id}" style="margin-left:8px">${FORMS[d.form].kind === 'plan' ? '+ 소방계획서 작성' : d.form === 'work_done' ? '+ 공사 완료 보고서 작성' : '+ 기록 작성'}</a></h3><div id="recs"><p class="note">불러오는 중…</p></div></section>` : ''}
+  ${FORMS[d.form] ? `<section class="sec"><h3>${esc(FORMS[d.form].name)} 기록 <a class="btn pri" href="#docrec-edit/new-${d.id}" style="margin-left:8px">${FORMS[d.form].kind === 'plan' ? '+ 소방계획서 작성' : FORMS[d.form].addLabel || '+ 기록 작성'}</a></h3><div id="recs"><p class="note">불러오는 중…</p></div></section>` : ''}
   <section class="sec"><h3>첨부 서류</h3>${(d.files || []).length ? `<ul class="list">${d.files.map((f, i) => `<li><span>${/^image\//.test(f.type || '') ? '🖼️' : '📄'} ${esc(f.name)}</span><button class="ghost" data-open="${i}">열기</button></li>`).join('')}</ul>` : '<p class="note">첨부된 파일이 없습니다. <b>수정·갱신</b>에서 PDF·사진·한글·엑셀 파일을 올릴 수 있습니다.</p>'}</section></div>`;
   if (FORMS[d.form]) { const fm = FORMS[d.form]; const recs = await q(sb.from('ow_doc_records').select('id,date,performer,results,header,approvals').eq('doc_id', d.id).order('date', { ascending: false }).limit(60));
     $('#recs').innerHTML = recs.length ? `<div class="scroll"><table class="stack"><thead><tr><th>${fm.dateLabel}</th><th>${fm.performer}</th><th>${fm.kind === 'plan' ? '연도' : '결과'}</th></tr></thead><tbody>${recs.map(x => { const bad = Object.values(x.results || {}).filter(v => v?.r && !GOOD.includes(v.r)).length; return `<tr><td><a href="#docrec/${x.id}"><b>${esc(x.date)}</b>${x.header?.title ? ' · ' + esc(x.header.title) : ''}</a>${fm.approve ? (S.roles.every(k => (x.approvals || {})[k]) ? ' <span class="pill ok">결재 완료</span>' : ' <span class="pill acc">결재 중</span>') : ''}</td><td>${esc(x.performer || '')}</td><td>${fm.kind === 'plan' ? `<span class="pill acc">${esc(x.date.slice(0, 4))}년도</span>` : bad ? `<span class="pill bad">확인 필요 ${bad}건</span>` : `<span class="pill ok">모두 ${esc(fm.results[0])}</span>`}</td></tr>`; }).join('')}</tbody></table></div>` : `<p class="note">아직 기록이 없습니다. ${esc(fm.cycle)} 작성하세요.</p>`; }
@@ -924,7 +924,7 @@ const FORMS = {
       ['분무재·내화피복재', '부스러짐·박리 여부'], ['비산 가능성', '진동(기계실·문 여닫힘), 기류(공조·환기), 사람 접촉 빈도'],
       ['표시·관리', '석면 함유 표시, 석면지도 비치, 이용자 안내'], ['공사·보수', '석면 자재 건드리는 공사 여부, 해체·제거 신고']
     ],
-    reportTitle: '조치 및 관리대장 기록', report: [['fix', '조치 내용 (보수·밀봉·구역 폐쇄 등)'], ['fixdate', '조치일'], ['ledger', '석면건축물 관리대장(정보망) 기록일']],
+    reportTitle: '조치 및 관리대장 기록', itemsTitle: '조사 항목', addLabel: '+ 조사표 작성', report: [['fix', '조치 내용 (보수·밀봉·구역 폐쇄 등)'], ['fixdate', '조치일'], ['ledger', '석면건축물 관리대장(정보망) 기록일']],
     guide: '석면건축물 소유자는 6개월마다 손상 상태와 비산 가능성을 조사하고, 위해성에 따라 보수·밀봉·구역 폐쇄 등 필요한 조치를 한 뒤 석면건축물 관리대장(석면관리 정보망)에 지체 없이 기록해야 합니다. 손상 부위는 직접 만지거나 제거하지 말고 사진을 첨부하세요.'
   },
   work_plan: {
@@ -939,7 +939,7 @@ const FORMS = {
       ['인허가', '인허가·신고 필요 여부 확인'], ['폐기물', '폐기물 처리 계획']
     ],
     reportTitle: '공사 범위와 세부 내용', report: [['scope', '공사 범위·물량'], ['material', '주요 자재'], ['risk', '예상 문제와 대책']],
-    noteLabel: '세부 계획 및 특이사항', toDone: 1,
+    noteLabel: '세부 계획 및 특이사항', toDone: 1, itemsTitle: '사전 확인 항목', addLabel: '+ 공사·보수 계획서 작성',
     guide: '결재가 끝나면 공사를 진행하고, 공사가 끝나면 이 계획서 화면의 "공사 완료 보고서 만들기"로 완료 보고서를 작성하세요. 견적서·현장 사진은 원본 첨부에 올려 두세요.'
   },
   work_done: {
@@ -953,7 +953,7 @@ const FORMS = {
       ['시운전', '설비·기계 시운전과 정상 작동 확인'], ['서류', '준공 사진(공사 전·중·후)·도면 제출'], ['서류', '하자이행보증서 제출'], ['정산', '공사대금 정산, 지출결의서 작성']
     ],
     reportTitle: '보완 요청 및 하자 처리', report: [['fix', '보완 요청 사항'], ['due', '보완 기한'], ['done', '보완 완료일']],
-    noteLabel: '공사 내용 및 특이사항',
+    noteLabel: '공사 내용 및 특이사항', itemsTitle: '준공 확인 항목', addLabel: '+ 공사 완료 보고서 작성',
     guide: '공사 전·중·후 사진과 견적서·계약서·준공 도면을 원본 첨부에 올려 두세요. 하자보수 만료일 전에 현장을 다시 확인하고, 결재가 끝나면 공사대금 지출결의서를 작성합니다.'
   }
 };
@@ -1080,7 +1080,7 @@ routes['docrec-edit'] = async arg => {
   M().innerHTML = `<div class="head"><h2>${esc(fm.name)} ${r ? '수정' : '작성'}</h2><div class="ctrls"><a class="btn ghost" href="${r ? '#docrec/' + r.id : '#doc/' + docId}">취소</a><button class="pri" id="save">저장</button></div></div>
   <div class="form" id="hd">${fieldHTML({ k: 'date', label: fm.dateLabel, type: 'date', req: 1 }, r?.date || today())}${fieldHTML({ k: 'performer', label: fm.performer, list: 'staffList', req: 1 }, r?.performer || d.holder || myName())}
   ${fm.header.map(([k, l, w]) => fieldHTML({ k: 'h_' + k, label: l, wide: w ? 1 : 0 }, h[k])).join('')}</div>
-  <section class="sec"><h3>점검 항목 <span class="note">${r ? '' : prev ? '기본 정보는 지난 기록에서 가져왔습니다 · ' : ''}<button type="button" class="ghost" id="allok">모두 ${esc(fm.results[0])}</button></span></h3>
+  <section class="sec"><h3>${esc(fm.itemsTitle || '점검 항목')} <span class="note">${r ? '' : prev ? '기본 정보는 지난 기록에서 가져왔습니다 · ' : ''}<button type="button" class="ghost" id="allok">모두 ${esc(fm.results[0])}</button></span></h3>
   <div class="scroll"><table class="stack"><thead><tr><th>점검항목</th><th>내용</th><th>결과</th><th>조치 내용</th></tr></thead><tbody>${fm.items.map(([g, c, m], i) => `<tr><td>${i && fm.items[i - 1][0] === g ? '' : `<b>${esc(g)}</b>`}</td><td>${esc(c)}${m ? ` <small class="note">(${esc(m)})</small>` : ''}</td><td><select data-ri="${i}" style="min-width:96px"><option value=""></option>${fm.results.map(o => `<option${res[i]?.r === o ? ' selected' : ''}>${o}</option>`).join('')}</select></td><td><input data-fi="${i}" value="${esc(res[i]?.fix || '')}" placeholder="불량·보완 시 조치"></td></tr>`).join('')}</tbody></table></div></section>
   ${fm.report ? `<section class="sec"><h3>${esc(fm.reportTitle || '불량사항 개선보고')}</h3><div class="form" id="rp">${fm.report.map(([k, l]) => fieldHTML({ k: 'r_' + k, label: l }, rp[k])).join('')}</div></section>` : ''}
   <div class="form">${fieldHTML({ k: 'note', label: fm.noteLabel || '기타사항', type: 'textarea', wide: 1 }, r?.note)}</div>
@@ -1156,7 +1156,7 @@ routes['check-edit'] = async id => {
   const list = r ? Object.values(r.results || {}) : (S.check_items || []).map(x => ({ area: x.area, item: x.item, r: '양호', note: '' }));
   M().innerHTML = `<div class="head"><h2>${r ? '점검 기록 수정 요청' : '시설 점검'}</h2><div class="ctrls"><a class="btn ghost" href="${r ? '#check/' + r.id : '#checks'}">취소</a><button class="pri" id="save">저장</button></div></div>
   <div class="form" id="basic">${fieldHTML({ k: 'date', label: '점검일', type: 'date', req: 1 }, r?.date || today())}${fieldHTML({ k: 'inspector', label: '점검자', list: 'staffList', req: 1 }, r?.inspector || myName())}</div>
-  <section class="sec"><h3>점검 항목 <span class="note">(항목은 설정에서 바꿉니다)</span></h3>
+  <section class="sec"><h3>${esc(fm.itemsTitle || '점검 항목')} <span class="note">(항목은 설정에서 바꿉니다)</span></h3>
   ${list.map((x, i) => `<div class="chk"><div><span class="pill">${esc(x.area)}</span> ${esc(x.item)}</div><div class="seg" role="radiogroup">${CRES.map(o => `<label class="${o === '불량' ? 'b' : ''}"><input type="radio" name="c${i}" value="${o}"${x.r === o ? ' checked' : ''}><span>${o}</span></label>`).join('')}</div>
     <input class="wide" data-n="${i}" placeholder="조치 내용 / 메모" value="${esc(x.note)}"></div>`).join('') || '<p class="note">설정에서 점검 항목을 먼저 넣어 주세요.</p>'}</section>
   <section class="sec"><h3>종합 의견</h3><textarea id="note">${esc(r?.note || '')}</textarea></section>
