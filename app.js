@@ -93,7 +93,7 @@ function drawWho() {
 }
 
 /* ---------- 설정 ---------- */
-const S_DEFAULT = { org: { name: '' }, roles: ['담당','팀장','총괄부장','사무처장'], approvers: {}, staff: [], meal: { people: [], price: 0, place: '' }, check_items: [] };
+const S_DEFAULT = { org: { name: '' }, roles: ['담당','팀장','총무부장','사무처장'], approvers: {}, staff: [], meal: { people: [], price: 0, place: '' }, check_items: [] };
 let S = { ...S_DEFAULT };
 async function loadSettings() {
   const rows = await q(sb.from('ow_settings').select('key,value').eq('site_id', SITE));
