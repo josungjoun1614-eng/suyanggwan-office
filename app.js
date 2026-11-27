@@ -214,7 +214,7 @@ const pending = rows => rows.filter(r => !(r.approvals || {})[lastRole()]).lengt
 const stampsHTML = ap => `<div class="stamps">${S.roles.map(r => `<i class="${(ap || {})[r] ? 'on' : ''}">${esc(r)}</i>`).join('')}</div>`;
 
 /* ---------- 라우터 ---------- */
-const NAV = { log: 'logs', 'log-edit': 'logs', exp: 'expenses', 'exp-edit': 'expenses', check: 'checks', 'check-edit': 'checks' };
+const NAV = { leave: 'leaves', 'leave-edit': 'leaves', log: 'logs', 'log-edit': 'logs', exp: 'expenses', 'exp-edit': 'expenses', check: 'checks', 'check-edit': 'checks' };
 const routes = {};
 async function route() {
   if (!ME) return;
@@ -622,6 +622,70 @@ routes.meals = async () => {
       }); });
   };
   draw();
+};
+
+/* ================= 휴가 신청서 (월차·연차·병가·휴가) ================= */
+const LKINDS = ['월차', '연차', '병가', '휴가', '공가', '경조사', '기타'];
+const LCOLOR = { 월차: 'acc', 연차: 'ok', 병가: 'bad', 휴가: 'ok' };
+const leaveDays = (a, b, half) => { if (!a || !b) return 0; if (half) return 0.5; const d = (new Date(b) - new Date(a)) / 864e5 + 1; return d > 0 ? d : 0; };
+const lPeriod = l => l.start_date === l.end_date ? `${l.start_date}${l.half ? ` (${l.half} 반차)` : ''}` : `${l.start_date} ~ ${l.end_date}`;
+let LYEAR = today().slice(0, 4);
+routes.leaves = async () => {
+  const [a, b] = mRange(MONTH);
+  const rows = await q(sb.from('ow_leaves').select('*').eq('site_id', SITE).lt('start_date', b).gte('end_date', a).order('start_date', { ascending: false }));
+  const yr = await q(sb.from('ow_leaves').select('applicant,kind,days,approvals').eq('site_id', SITE).gte('start_date', LYEAR + '-01-01').lte('start_date', LYEAR + '-12-31'));
+  const done = l => !!(l.approvals || {})[lastRole()];
+  const people = {}; yr.forEach(l => { const p = people[l.applicant] ||= {}; p[l.kind] = (p[l.kind] || 0) + Number(l.days || 0); });
+  const used = LKINDS.filter(k => yr.some(l => l.kind === k));
+  M().innerHTML = `<div class="head"><h2>휴가 신청서</h2><div class="ctrls">${monthPick()}<a class="btn pri" href="#leave-edit/new">+ 신청서 작성</a></div></div>
+  <div class="kpis"><div class="hot"><b class="num">${rows.length}</b><span>${mLabel(MONTH)} 신청</span></div><div><b class="num">${rows.reduce((s, l) => s + Number(l.days || 0), 0)}</b><span>신청 일수</span></div><div><b class="num">${rows.filter(l => !done(l)).length}</b><span>결재 대기</span></div></div>
+  ${rows.length ? `<div class="scroll"><table class="stack"><thead><tr><th>기간</th><th>종류</th><th>신청자</th><th class="r">일수</th><th>사유</th><th>결재</th></tr></thead><tbody>${rows.map(l => `<tr><td><a href="#leave/${l.id}"><b>${esc(lPeriod(l))}</b></a></td><td><span class="pill ${LCOLOR[l.kind] || ''}">${esc(l.kind)}</span></td><td>${esc(l.applicant)}</td><td class="r num">${esc(Number(l.days))}</td><td>${esc(l.reason || '')}</td><td>${stampsHTML(l.approvals)}</td></tr>`).join('')}</tbody></table></div>` : `<div class="empty">${mLabel(MONTH)} 휴가 신청이 없습니다.</div>`}
+  <section class="sec"><h3>${esc(LYEAR)}년 사용 현황 <span class="note">신청 기준 일수</span> <select id="lyear" style="width:auto;min-height:32px;padding:2px 8px;margin-left:8px">${[0, 1, 2].map(i => String(+today().slice(0, 4) - i)).map(y => `<option${y === LYEAR ? ' selected' : ''}>${y}</option>`).join('')}</select></h3>
+  ${Object.keys(people).length ? `<div class="scroll"><table class="stack"><thead><tr><th>이름</th>${used.map(k => `<th class="r">${k}</th>`).join('')}<th class="r">합계</th></tr></thead><tbody>${Object.entries(people).sort().map(([n, p]) => `<tr><td>${esc(n)}</td>${used.map(k => `<td class="r num">${p[k] || ''}</td>`).join('')}<td class="r num"><b>${Object.values(p).reduce((s, x) => s + x, 0)}</b></td></tr>`).join('')}</tbody></table></div>` : '<p class="note">기록이 없습니다.</p>'}</section>`;
+  $('#lyear').onchange = e => { LYEAR = e.target.value; route(); };
+  bindMonth();
+};
+routes.leave = async id => {
+  const l = await q(sb.from('ow_leaves').select('*').eq('id', id).maybeSingle());
+  if (!l) { M().innerHTML = '<div class="empty">신청서를 찾을 수 없습니다.</div>'; return; }
+  const render = () => {
+    const locked = Object.keys(l.approvals || {}).length > 0;
+    M().innerHTML = `<div class="head noprint"><a class="btn ghost" href="#leaves">← 목록</a><div class="ctrls">${locked && !isAdmin() ? '<span class="note">결재가 시작돼 수정·삭제하려면 결재를 먼저 취소하세요.</span>' : `<button class="ghost danger" id="del">삭제</button><a class="btn" href="#leave-edit/${l.id}">수정</a>`}<button class="pri" onclick="print()">인쇄</button></div></div>
+    <div class="doc">
+      <div class="doctop"><h2>${esc(l.kind)} 신청서</h2>${approveHTML(l.approvals)}</div>
+      <div class="kv">${[['소속', l.dept || siteName(l.site_id)], ['직위', l.position], ['성명', l.applicant], ['종류', l.kind], ['기간', lPeriod(l)], ['일수', Number(l.days) + '일'], ['업무 대행자', l.substitute], ['비상 연락처', l.contact], ['신청일', (l.created_at || '').slice(0, 10)]].map(([k, v]) => `<div><span>${k}</span>${esc(v || '')}</div>`).join('')}</div>
+      <section class="sec"><h3>사유</h3><p class="pre">${esc(l.reason || '')}</p></section>
+      ${l.note ? `<section class="sec"><h3>비고</h3><p class="pre">${esc(l.note)}</p></section>` : ''}
+      <p style="margin-top:28px;text-align:center">위와 같이 ${esc(l.kind)}를 신청하오니 허락하여 주시기 바랍니다.</p>
+      <p style="margin-top:18px;text-align:center">${esc((l.created_at || today()).slice(0, 10).replace(/-/g, '. '))}.</p>
+      <p style="margin-top:10px;text-align:right">신청인 &nbsp; <b>${esc(l.applicant)}</b> &nbsp; (인)</p>
+    </div>`;
+    bindApprove('ow_leaves', l, render);
+    const del = $('#del'); if (del) del.onclick = () => confirmBox(`${l.applicant}님의 ${l.kind} 신청서를 삭제할까요?`, '삭제', async () => { await q(sb.from('ow_leaves').delete().eq('id', l.id)); toast('삭제했습니다.'); location.hash = '#leaves'; });
+  };
+  render();
+};
+routes['leave-edit'] = async id => {
+  let l = null;
+  if (id && id !== 'new') { l = await q(sb.from('ow_leaves').select('*').eq('id', id).maybeSingle()); if (!l) { M().innerHTML = '<div class="empty">신청서를 찾을 수 없습니다.</div>'; return; } }
+  const d = l || { kind: '연차', applicant: myName(), dept: S.org?.name || siteName(SITE), position: '', start_date: today(), end_date: today(), half: null, days: 1, reason: '', contact: '', substitute: '', note: '' };
+  const F = [{ k: 'kind', label: '종류', type: 'select', options: LKINDS, req: 1 }, { k: 'applicant', label: '성명', list: 'staffList', req: 1 }, { k: 'dept', label: '소속' }, { k: 'position', label: '직위' },
+    { k: 'start_date', label: '시작일', type: 'date', req: 1 }, { k: 'end_date', label: '종료일', type: 'date', req: 1 }, { k: 'half', label: '반차', type: 'select', options: ['없음', '오전', '오후'] }, { k: 'days', label: '일수', type: 'number', req: 1 },
+    { k: 'substitute', label: '업무 대행자', list: 'staffList' }, { k: 'contact', label: '비상 연락처', type: 'tel' }, { k: 'reason', label: '사유', type: 'textarea', wide: 1, req: 1 }, { k: 'note', label: '비고', type: 'textarea', wide: 1 }];
+  M().innerHTML = `<div class="head"><h2>${l ? '신청서 수정' : '휴가 신청서 작성'}</h2><div class="ctrls"><a class="btn ghost" href="${l ? '#leave/' + l.id : '#leaves'}">취소</a><button class="pri" id="save">저장</button></div></div>
+  <div class="form" id="basic">${F.map(f => fieldHTML(f, f.k === 'half' ? (d.half || '없음') : d[f.k])).join('')}</div>
+  <p class="note">월차·연차·병가·휴가 모두 같은 양식입니다. 일수는 기간을 고르면 자동으로 계산되고, 직접 고칠 수도 있습니다.</p>`;
+  const recalc = () => { const s = $('#f_start_date').value, e = $('#f_end_date').value, h = $('#f_half').value; if (e < s) $('#f_end_date').value = s; if (h !== '없음') $('#f_end_date').value = s; $('#f_days').value = leaveDays(s, $('#f_end_date').value, h !== '없음'); };
+  ['start_date', 'end_date', 'half'].forEach(k => $('#f_' + k).onchange = recalc);
+  $('#save').onclick = async () => {
+    const v = readForm($('#basic'), F);
+    if (!v.applicant || !v.start_date || !v.end_date || !v.reason) return toast('성명, 기간, 사유를 입력하세요.');
+    if (v.end_date < v.start_date) return toast('종료일이 시작일보다 빠릅니다.');
+    if (!(v.days > 0)) return toast('일수를 확인하세요.');
+    v.half = v.half === '없음' ? null : v.half; if (v.half) v.end_date = v.start_date;
+    if (l) { await q(sb.from('ow_leaves').update({ ...v, updated_at: new Date().toISOString() }).eq('id', l.id)); toast('저장했습니다.'); location.hash = '#leave/' + l.id; }
+    else { const r = await q(sb.from('ow_leaves').insert({ ...v, site_id: SITE }).select('id').single()); toast('신청했습니다. 결재자에게 알려 주세요.'); location.hash = '#leave/' + r.id; }
+  };
 };
 
 /* ================= 할 일 ================= */
