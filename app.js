@@ -404,7 +404,9 @@ routes.album = async () => {
 
 /* ================= 지출결의서 ================= */
 const PAY = ['법인카드','개인카드(정산)','현금','계좌이체'];
-const EKINDS = ['식대', '운영비'];
+const EKINDS = ['식대', '운영비', '물품구입'];
+const GOODS = ['사무용품', '공구·장비', '자재', '청소용품', '비품', '소모품', '기타'];
+const CATS_OF = { 운영비: () => OPEX, 물품구입: () => GOODS };
 const OPEX = ['전기', '수도', '가스', '유류', '소모품', '수리·보수', '통신', '차량', '청소·위생', '기타'];
 let EXPK = '전체';
 const expTotal = items => (items || []).reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.price) || 0), 0);
@@ -413,13 +415,14 @@ routes.expenses = async () => {
   const all = await q(sb.from('ow_expenses').select('*').eq('site_id', SITE).gte('date', a).lt('date', b).order('date', { ascending: false }));
   const rows = EXPK === '전체' ? all : all.filter(e => (e.kind || '식대') === EXPK);
   const sumK = k => all.filter(e => (e.kind || '식대') === k).reduce((s, e) => s + Number(e.total), 0);
-  const ops = all.filter(e => e.kind === '운영비'), byCat = {};
+  const ops = all.filter(e => e.kind === EXPK && CATS_OF[EXPK]), byCat = {};
   ops.forEach(e => (e.items || []).forEach(i => { const c = i.cat || '기타'; byCat[c] = (byCat[c] || 0) + (Number(i.qty) || 0) * (Number(i.price) || 0); }));
-  const cats = OPEX.filter(c => byCat[c]).concat(Object.keys(byCat).filter(c => !OPEX.includes(c)));
-  M().innerHTML = `<div class="head"><h2>지출결의서</h2><div class="ctrls">${monthPick()}<a class="btn" href="#meals">식대 결의서 만들기</a><a class="btn" href="#exp-edit/new-op">+ 운영비 결의서</a><a class="btn pri" href="#exp-edit/new">+ 새 결의서</a></div></div>
-  <div class="kpis"><div class="hot"><b class="num">${won(all.reduce((s, e) => s + Number(e.total), 0))}</b><span>${mLabel(MONTH)} 지출 합계(원)</span></div><div><b class="num">${won(sumK('식대'))}</b><span>식대(원)</span></div><div><b class="num">${won(sumK('운영비'))}</b><span>운영비(원)</span></div><div><b class="num">${pending(all)}</b><span>결재 대기</span></div></div>
+  const catList = CATS_OF[EXPK] ? CATS_OF[EXPK]() : [];
+  const cats = catList.filter(c => byCat[c]).concat(Object.keys(byCat).filter(c => !catList.includes(c)));
+  M().innerHTML = `<div class="head"><h2>지출결의서</h2><div class="ctrls">${monthPick()}<a class="btn" href="#meals">식대 결의서 만들기</a><a class="btn" href="#exp-edit/new-op">+ 운영비 결의서</a><a class="btn" href="#exp-edit/new-buy">+ 물품구입 결의서</a><a class="btn pri" href="#exp-edit/new">+ 새 결의서</a></div></div>
+  <div class="kpis"><div class="hot"><b class="num">${won(all.reduce((s, e) => s + Number(e.total), 0))}</b><span>${mLabel(MONTH)} 지출 합계(원)</span></div><div><b class="num">${won(sumK('식대'))}</b><span>식대(원)</span></div><div><b class="num">${won(sumK('운영비'))}</b><span>운영비(원)</span></div><div><b class="num">${won(sumK('물품구입'))}</b><span>물품구입(원)</span></div><div><b class="num">${pending(all)}</b><span>결재 대기</span></div></div>
   <div class="ctrls" style="margin:4px 0 12px" role="group" aria-label="구분">${['전체', ...EKINDS].map(k => `<button type="button" class="${k === EXPK ? 'pri' : 'ghost'}" data-ek="${k}">${k}</button>`).join('')}</div>
-  ${EXPK === '운영비' && cats.length ? `<section class="sec"><h3>운영비 항목별 합계</h3><div class="scroll"><table class="stack"><thead><tr><th>항목</th><th class="r">금액(원)</th></tr></thead><tbody>${cats.map(c => `<tr><td>${esc(c)}</td><td class="r num">${won(byCat[c])}</td></tr>`).join('')}</tbody><tfoot><tr><td>합계</td><td class="r num">${won(sumK('운영비'))}</td></tr></tfoot></table></div></section>` : ''}
+  ${CATS_OF[EXPK] && cats.length ? `<section class="sec"><h3>${EXPK} ${EXPK === '물품구입' ? '분류' : '항목'}별 합계</h3><div class="scroll"><table class="stack"><thead><tr><th>${EXPK === '물품구입' ? '분류' : '항목'}</th><th class="r">금액(원)</th></tr></thead><tbody>${cats.map(c => `<tr><td>${esc(c)}</td><td class="r num">${won(byCat[c])}</td></tr>`).join('')}</tbody><tfoot><tr><td>합계</td><td class="r num">${won(sumK(EXPK))}</td></tr></tfoot></table></div></section>` : ''}
   ${rows.length ? `<div class="scroll"><table class="stack"><thead><tr><th>지출일</th><th>구분</th><th>제목</th><th>거래처</th><th>결제</th><th class="r">금액(원)</th><th>결재</th></tr></thead><tbody>${rows.map(e => `<tr><td>${esc(e.date)}</td><td>${esc(e.kind || '식대')}</td><td><a href="#exp/${e.id}"><b>${esc(e.title)}</b></a></td><td>${esc(e.vendor)}</td><td>${esc(e.pay_method)}</td><td class="r num">${won(e.total)}</td><td>${stampsHTML(e.approvals)}</td></tr>`).join('')}</tbody></table></div>` : `<div class="empty">${mLabel(MONTH)} ${EXPK === '전체' ? '' : EXPK + ' '}지출결의서가 없습니다.</div>`}`;
   M().querySelectorAll('[data-ek]').forEach(b => b.onclick = () => { EXPK = b.dataset.ek; route(); });
   bindMonth();
@@ -430,12 +433,12 @@ routes.exp = async id => {
   const render = () => {
     M().innerHTML = `<div class="head noprint"><a class="btn ghost" href="#expenses">← 목록</a><div class="ctrls"><button class="ghost danger" id="del">삭제 요청</button><a class="btn" href="#exp-edit/${e.id}">수정 요청</a><button class="pri" onclick="print()">인쇄</button></div></div>
     <div class="doc">
-      <div class="doctop"><h2>지출결의서${e.kind === '운영비' ? ' <small>(운영비)</small>' : ''}</h2>${approveHTML(e.approvals)}</div>
+      <div class="doctop"><h2>지출결의서${e.kind && e.kind !== '식대' ? ` <small>(${esc(e.kind)})</small>` : ''}</h2>${approveHTML(e.approvals)}</div>
       <div class="kv">${[['구분', e.kind || '식대'], ['부서', e.dept], ['작성자', e.author], ['지출일', e.date], ['거래처', e.vendor], ['결제 방법', e.pay_method], ['작성일', (e.created_at || '').slice(0, 10)]].map(([k, v]) => `<div><span>${k}</span>${esc(v)}</div>`).join('')}</div>
       <div class="amount">금 ${korMoney(e.total)}원정 <small>(₩${won(e.total)})</small></div>
       <p><b>제목</b> ${esc(e.title)}</p>
       <div class="scroll"><table class="stack"><thead><tr><th>내용</th><th class="r">수량</th><th class="r">단가</th><th class="r">금액</th><th>비고</th></tr></thead>
-      <tbody>${(e.items || []).map(i => `<tr><td>${e.kind === '운영비' && i.cat ? `[${esc(i.cat)}] ` : ''}${esc(i.desc)}</td><td class="r">${esc(i.qty)}</td><td class="r">${won(i.price)}</td><td class="r">${won((Number(i.qty) || 0) * (Number(i.price) || 0))}</td><td>${esc(i.note)}</td></tr>`).join('') || '<tr><td colspan="5">내역 없음</td></tr>'}</tbody>
+      <tbody>${(e.items || []).map(i => `<tr><td>${CATS_OF[e.kind] && i.cat ? `[${esc(i.cat)}] ` : ''}${esc(i.desc)}${i.spec ? ` <small>(${esc(i.spec)})</small>` : ''}</td><td class="r">${esc(i.qty)}${i.unit ? ' ' + esc(i.unit) : ''}</td><td class="r">${won(i.price)}</td><td class="r">${won((Number(i.qty) || 0) * (Number(i.price) || 0))}</td><td>${esc(i.note)}</td></tr>`).join('') || '<tr><td colspan="5">내역 없음</td></tr>'}</tbody>
       <tfoot><tr><td>합계</td><td></td><td></td><td class="r">${won(e.total)}</td><td></td></tr></tfoot></table></div>
       ${e.note ? `<section class="sec"><h3>비고</h3><p class="pre">${esc(e.note)}</p></section>` : ''}
       <p style="margin-top:18px">위 금액을 지출하고자 하오니 결재하여 주시기 바랍니다.</p>
@@ -456,12 +459,12 @@ routes.exp = async id => {
 };
 routes['exp-edit'] = async id => {
   let e;
-  const newOp = id === 'new-op';
+  const newKind = id === 'new-op' ? '운영비' : id === 'new-buy' ? '물품구입' : '식대';
   if (id && !id.startsWith('new')) e = await q(sb.from('ow_expenses').select('*').eq('id', id).maybeSingle());
-  const d = e ? structuredClone(e) : { date: today(), title: '', dept: S.org?.name || '덕정 수양관', author: myName(), vendor: '', pay_method: PAY[0], items: [{ desc: '', qty: 1, price: '', note: '', ...(newOp ? { cat: OPEX[0] } : {}) }], note: '', receipts: [], kind: newOp ? '운영비' : '식대' };
+  const d = e ? structuredClone(e) : { date: today(), title: '', dept: S.org?.name || '덕정 수양관', author: myName(), vendor: '', pay_method: PAY[0], items: [], note: '', receipts: [], kind: newKind };
   d.kind = d.kind || '식대';
   const F = [{ k: 'kind', label: '구분', type: 'select', options: EKINDS }, { k: 'title', label: '제목', req: 1, wide: 1 }, { k: 'date', label: '지출일', type: 'date', req: 1 }, { k: 'dept', label: '부서' }, { k: 'author', label: '작성자', list: 'staffList', req: 1 }, { k: 'vendor', label: '거래처' }, { k: 'pay_method', label: '결제 방법', type: 'select', options: PAY }];
-  M().innerHTML = `<div class="head"><h2>${e ? '결의서 수정 요청' : d.kind === '운영비' ? '새 운영비 결의서' : '새 지출결의서'}</h2><div class="ctrls"><a class="btn ghost" href="${e ? '#exp/' + e.id : '#expenses'}">취소</a><button class="pri" id="save">저장</button></div></div>
+  M().innerHTML = `<div class="head"><h2>${e ? '결의서 수정 요청' : d.kind === '식대' ? '새 지출결의서' : `새 ${d.kind} 결의서`}</h2><div class="ctrls"><a class="btn ghost" href="${e ? '#exp/' + e.id : '#expenses'}">취소</a><button class="pri" id="save">저장</button></div></div>
   <section class="sec"><h3>기본 정보</h3><div class="form" id="basic">${F.map(f => fieldHTML(f, d[f.k])).join('')}</div></section>
   <section class="sec"><h3>지출 내역 <span class="note" id="tot"></span></h3>
     <div class="ctrls" id="mealCtl" style="margin-bottom:12px"><input type="month" id="mm" value="${esc((d.date || today()).slice(0, 7))}" aria-label="식수표 월"><select id="mmode" aria-label="불러오기 방식"><option value="sum">전체 합산 (한 줄)</option><option value="each">1인별 (사람마다 한 줄)</option></select><button type="button" id="fromMeal">식수표에서 수량 불러오기</button><span class="note">고른 달 식수표의 식수를 수량으로, 설정의 1식 단가를 단가로 넣습니다.</span></div>
@@ -473,13 +476,17 @@ routes['exp-edit'] = async id => {
   const calcR = r => '금액 ' + won((Number(r.qty) || 0) * (Number(r.price) || 0)) + '원';
   let ed;
   const drawItems = () => {
-    const op = d.kind === '운영비';
-    if (op) d.items.forEach(i => { if (!i.cat) i.cat = OPEX[0]; });
+    const k = d.kind, cl = CATS_OF[k] ? CATS_OF[k]() : null;
+    const blank = () => k === '물품구입' ? { cat: GOODS[0], desc: '', spec: '', unit: '개', qty: 1, price: '', note: '' } : cl ? { cat: cl[0], desc: '', qty: 1, price: '', note: '' } : { desc: '', qty: 1, price: '', note: '' };
+    if (!d.items.length) d.items.push(blank());
+    if (cl) d.items.forEach(i => { if (!cl.includes(i.cat)) i.cat = cl[0]; });
     $('#items').replaceWith(Object.assign(document.createElement('div'), { id: 'items' }));
-    ed = rowsEditor($('#items'), d.items, op ? [['cat','항목','sel',OPEX],['desc','내용','text','wide'],['qty','수량','number'],['price','단가(원)','number'],['note','비고']] : [['desc','내용','text','wide'],['qty','수량','number'],['price','단가(원)','number'],['note','비고']],
-      () => op ? { cat: OPEX[0], desc: '', qty: 1, price: '', note: '' } : { desc: '', qty: 1, price: '', note: '' }, calcR);
+    const cols = k === '물품구입' ? [['cat','분류','sel',GOODS],['desc','품명','text','wide'],['spec','규격'],['unit','단위'],['qty','수량','number'],['price','단가(원)','number'],['note','비고']]
+      : cl ? [['cat','항목','sel',cl],['desc','내용','text','wide'],['qty','수량','number'],['price','단가(원)','number'],['note','비고']]
+      : [['desc','내용','text','wide'],['qty','수량','number'],['price','단가(원)','number'],['note','비고']];
+    ed = rowsEditor($('#items'), d.items, cols, blank, calcR);
     $('#items').addEventListener('rowschange', tot);
-    $('#mealCtl').style.display = op ? 'none' : '';
+    $('#mealCtl').style.display = k === '식대' ? '' : 'none';
     tot();
   };
   drawItems();
@@ -511,7 +518,7 @@ routes['exp-edit'] = async id => {
   $('#save').onclick = async () => {
     const v = readForm($('#basic'), F); if (!v.title || !v.date || !v.author) return toast('제목, 지출일, 작성자를 입력하세요.');
     // 식대 결의서인데 식수 줄이 없으면 그 달 식수표를 자동으로 불러옴
-    if (v.kind !== '운영비' && /식대/.test(v.title) && !d.items.some(x => isMeal(x) && Number(x.qty) > 0)) {
+    if (v.kind === '식대' && /식대/.test(v.title) && !d.items.some(x => isMeal(x) && Number(x.qty) > 0)) {
       const ok = await loadMeal(v.date.slice(0, 7), 'sum', true);
       if (ok) { const f = readForm($('#basic'), F); Object.assign(v, { vendor: v.vendor || f.vendor }); }
     }
