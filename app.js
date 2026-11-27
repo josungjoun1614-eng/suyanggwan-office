@@ -198,7 +198,9 @@ const canSign = r => { const list = S.approvers?.[r] || []; return list.length ?
 function bindApprove(table, row, rerender) {
   M().querySelectorAll('[data-role]').forEach(b => b.onclick = () => {
     const r = b.dataset.role, ap = { ...(row.approvals || {}) };
-    const save = async (cancel = false) => { const res = await q(sb.rpc('ow_stamp', { tbl: table, rec: row.id, role: r, cancel })); row.approvals = res || {}; rerender(); };
+    const save = async (cancel = false) => { const res = await q(sb.rpc('ow_stamp', { tbl: table, rec: row.id, role: r, cancel })); row.approvals = res || {};
+      if (table === 'ow_expenses' && row.kind === '물품구입' && !row.stock_applied_at) { const x = await q(sb.from('ow_expenses').select('stock_applied_at').eq('id', row.id).maybeSingle()); if (x?.stock_applied_at) { row.stock_applied_at = x.stock_applied_at; toast('결재 완료 — 구입 품목을 재고에 입고했습니다.'); } }
+      rerender(); };
     if (ap[r]) {
       if (ap[r].uid !== ME.id && ap[r].name !== myName() && !isAdmin()) return toast('다른 사람의 결재는 본인이나 관리자만 취소할 수 있습니다.');
       confirmBox(`${ap[r].name} 님의 ${r} 결재를 취소할까요?`, '결재 취소', async () => { await save(true); }); return;
@@ -437,6 +439,7 @@ routes.exp = async id => {
       <div class="kv">${[['구분', e.kind || '식대'], ['부서', e.dept], ['작성자', e.author], ['지출일', e.date], ['거래처', e.vendor], ['결제 방법', e.pay_method], ['작성일', (e.created_at || '').slice(0, 10)]].map(([k, v]) => `<div><span>${k}</span>${esc(v)}</div>`).join('')}</div>
       <div class="amount">금 ${korMoney(e.total)}원정 <small>(₩${won(e.total)})</small></div>
       <p><b>제목</b> ${esc(e.title)}</p>
+      ${e.kind === '물품구입' ? `<p class="note noprint">${e.stock_applied_at ? `📦 재고에 입고 반영됨 (${esc(lt(e.stock_applied_at))}) — <a href="#inventory">재고 보기</a>` : '📦 결재가 모두 끝나면 품목이 재고에 자동으로 입고됩니다.'}</p>` : ''}
       <div class="scroll"><table class="stack"><thead><tr><th>내용</th><th class="r">수량</th><th class="r">단가</th><th class="r">금액</th><th>비고</th></tr></thead>
       <tbody>${(e.items || []).map(i => `<tr><td>${CATS_OF[e.kind] && i.cat ? `[${esc(i.cat)}] ` : ''}${esc(i.desc)}${i.spec ? ` <small>(${esc(i.spec)})</small>` : ''}</td><td class="r">${esc(i.qty)}${i.unit ? ' ' + esc(i.unit) : ''}</td><td class="r">${won(i.price)}</td><td class="r">${won((Number(i.qty) || 0) * (Number(i.price) || 0))}</td><td>${esc(i.note)}</td></tr>`).join('') || '<tr><td colspan="5">내역 없음</td></tr>'}</tbody>
       <tfoot><tr><td>합계</td><td></td><td></td><td class="r">${won(e.total)}</td><td></td></tr></tfoot></table></div>
