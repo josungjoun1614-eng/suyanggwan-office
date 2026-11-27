@@ -1166,7 +1166,7 @@ routes['check-edit'] = async id => {
   const list = r ? Object.values(r.results || {}) : (S.check_items || []).map(x => ({ area: x.area, item: x.item, r: '양호', note: '' }));
   M().innerHTML = `<div class="head"><h2>${r ? '점검 기록 수정 요청' : '시설 점검'}</h2><div class="ctrls"><a class="btn ghost" href="${r ? '#check/' + r.id : '#checks'}">취소</a><button class="pri" id="save">저장</button></div></div>
   <div class="form" id="basic">${fieldHTML({ k: 'date', label: '점검일', type: 'date', req: 1 }, r?.date || today())}${fieldHTML({ k: 'inspector', label: '점검자', list: 'staffList', req: 1 }, r?.inspector || myName())}</div>
-  <section class="sec"><h3>${esc(fm.itemsTitle || '점검 항목')} <span class="note">(항목은 설정에서 바꿉니다)</span></h3>
+  <section class="sec"><h3>점검 항목 <span class="note">(항목은 설정에서 바꿉니다)</span></h3>
   ${list.map((x, i) => `<div class="chk"><div><span class="pill">${esc(x.area)}</span> ${esc(x.item)}</div><div class="seg" role="radiogroup">${CRES.map(o => `<label class="${o === '불량' ? 'b' : ''}"><input type="radio" name="c${i}" value="${o}"${x.r === o ? ' checked' : ''}><span>${o}</span></label>`).join('')}</div>
     <input class="wide" data-n="${i}" placeholder="조치 내용 / 메모" value="${esc(x.note)}"></div>`).join('') || '<p class="note">설정에서 점검 항목을 먼저 넣어 주세요.</p>'}</section>
   <section class="sec"><h3>종합 의견</h3><textarea id="note">${esc(r?.note || '')}</textarea></section>
